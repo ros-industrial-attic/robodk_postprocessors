@@ -195,19 +195,19 @@ class RobotPost(object):
         else:
             filesave = folder + '/' + progname
         fid = open(filesave, "w")
-        fid.write('&ACCESS RVP')
-        fid.write('&REL 254')
-        fid.write('&PARAM TEMPLATE = C:\KRC\Roboter\Template\vorgabe')
-        fid.write('&PARAM EDITMASK = *')
+        fid.write('&ACCESS RVP\n')
+        fid.write('&REL 254\n')
+        fid.write('&PARAM TEMPLATE = C:\\KRC\\Roboter\\Template\\vorgabe\n')
+        fid.write('&PARAM EDITMASK = *\n')
         fid.write(self.PROG)
         fid.close()
         print('SAVED: %s\n' % filesave) # tell RoboDK the path of the saved file
         filesave_dat = filesave[:-3] + 'dat'
         fid2 = open(filesave_dat, "w")
-        fid2.write('&ACCESS RVP')
-        fid2.write('&REL 254')
-        fid2.write('&PARAM TEMPLATE = C:\KRC\Roboter\Template\vorgabe')
-        fid2.write('&PARAM EDITMASK = *')
+        fid2.write('&ACCESS RVP\n')
+        fid2.write('&REL 254\n')
+        fid2.write('&PARAM TEMPLATE = C:\\KRC\\Roboter\\Template\\vorgabe\n')
+        fid2.write('&PARAM EDITMASK = *\n')
         fid2.write('DEFDAT  %s\n\n' % self.PROG_NAME)
         fid2.write(self.PROG_DAT)
         fid2.write('\nENDDAT\n\n')
