@@ -340,7 +340,7 @@ class RobotPost(object):
             cf6_2 = math.floor(joints2[5]/90.0)
         [REAR, LOWERARM, FLIP] = conf_RLF_2
         cfx_2 = 4*REAR + 2*LOWERARM + FLIP
-        self.addline('%s [%s,[%i,%i,%i,%i],%s],[%s,[%i,%i,%i,%i],%s],%s,%s,%s,Tool0,\WObj:=WObj0;' % (self.MOVEDATAC, pose_2_str(pose1), cf1_1, cf4_1, cf6_1,cfx_1, extaxes_2_str(joints1),pose_2_str(pose1), cf1_2, cf4_2, cf6_2,cfx_2, extaxes_2_str(joints2), self.SPEEDDATA, self.CLADDATA, self.ZONEDATA))
+        self.addline('%s [%s,[%i,%i,%i,%i],%s],[%s,[%i,%i,%i,%i],%s],%s,%s,%s,Tool0,\WObj:=WObj0;' % (self.MOVEDATAC, pose_2_str(pose1), cf1_1, cf4_1, cf6_1,cfx_1, extaxes_2_str(joints1), pose_2_str(pose2), cf1_2, cf4_2, cf6_2,cfx_2, extaxes_2_str(joints2), self.SPEEDDATA, self.CLADDATA, self.ZONEDATA))
                 
     def setFrame(self, pose, frame_id=None, frame_name=None):
         """Change the robot reference frame"""
