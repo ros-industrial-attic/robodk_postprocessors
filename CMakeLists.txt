@@ -16,7 +16,7 @@ add_action_files(
   DIRECTORY
   action
   FILES
-  Fibonacci.action
+  GenerateProgram.action
 )
 
 ## Generate messages
@@ -54,8 +54,7 @@ include_directories(
 
 ## Install scripts and executables
 install(PROGRAMS
-  scripts/fibonacci_client.py
-  scripts/fibonacci_server.py
+  scripts/generate_program_server.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
