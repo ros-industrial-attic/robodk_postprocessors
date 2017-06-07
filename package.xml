@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>robodk_postprocessors</name>
+  <version>0.1.0</version>
+  <description>RoboDK generic industrial post processors</description>
+  <author>Albert Nubiola</author>
+  <maintainer email="victor.lamoine@gmail.com">Victor Lamoine</maintainer>
+  <license>BSD</license>
+
+  <url type="repository">https://github.com/ros-industrial/robodk_postprocessors</url>
+  <url type="bugtracker">https://github.com/ros-industrial/robodk_postprocessors/issues</url>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <depend>actionlib</depend>
+  <depend>actionlib_msgs</depend>
+  <depend>genmsg</depend>
+  <depend>roscpp</depend>
+  <depend>message_generation</depend>
+  <depend>message_runtime</depend>
+</package>
+
