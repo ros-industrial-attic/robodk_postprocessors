@@ -1,4 +1,7 @@
 ## RoboDK Post Processors
+
+[![Build Status](https://travis-ci.org/InstitutMaupertuis/robodk_postprocessors.svg?branch=kinetic-devel)](https://travis-ci.org/InstitutMaupertuis/robodk_postprocessors)
+
 Open source vendor specific code generators/post processors from the RoboDK (www.robodk.com) application
 
 Post processors allow generating vendor specific programs from a generic/universal programming language. These post processors use a generic Python program to linked to a specific post processor (RobotPost class) that dictates how to generate the program.

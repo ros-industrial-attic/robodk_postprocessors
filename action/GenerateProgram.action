@@ -1,0 +1,9 @@
+# goal
+string post_processor_name
+string program_name
+---
+# result
+int32[] lines_generated
+---
+# feedback
+int32[] lines_generated
