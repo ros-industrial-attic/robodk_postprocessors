@@ -1,5 +1,5 @@
 ## RoboDK Post Processors
-Open source vendor specific code generators/post processors from the RoboDK (www.robodk.com) application
+Open source vendor specific code generators/post processors from the RoboDK (https://robodk.com) application.
 
 Post processors allow generating vendor specific programs from a generic/universal programming language. These post processors use a generic Python program to linked to a specific post processor (RobotPost class) that dictates how to generate the program.
 
@@ -8,11 +8,13 @@ Python must be installed.
 The robodk.py is included with the post processors and is required by all post processors.
 The robodk module includes useful tools for Pose multiplications and converting between poses and xyzwpr format.
 More information here:
-https://www.robodk.com/doc/PythonAPI/robodk.html
+https://pypi.org/project/robodk/
+https://github.com/RoboDK/RoboDK-API/tree/master/Python
+https://robodk.com/doc/PythonAPI/robodk.html
 
 ## Example
 # Generic code
-This is an example of a pre processed program that can be used to generate any vendor specific program.
+This is an example of a pre-processed program that can be used to generate any vendor specific program.
 
 ```python
 import sys
