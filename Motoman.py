@@ -11,7 +11,7 @@
 
 # ----------------------------------------------------
 # This file is a POST PROCESSOR for Robot Offline Programming to generate programs 
-# for a generic Fanuc robot with RoboDK
+# for a Motoman robot (Inform III programming language)
 #
 # To edit/test this POST PROCESSOR script file:
 # Select "Program"->"Add/Edit Post Processor", then select your post or create a new one.
@@ -41,7 +41,7 @@
 # ----------------------------------------------------
 
 
-def get_safe_name(progname, max_chars = 10):
+def get_safe_name(progname, max_chars = 6):
     """Get a safe program name"""
     # Remove special characters
     for c in r'-[]/\;,><&*:%=+@!#^()|?^':
@@ -66,22 +66,32 @@ import sys
 # ----------------------------------------------------    
 # Object class that handles the robot instructions/syntax
 class RobotPost(object):
-    """Robot post object defined for Fanuc robots"""
-    PROG_EXT = 'LS'             # set the program extension
-    MAX_LINES_X_PROG = 9999    # maximum number of lines per program. It will then generate multiple "pages (files)". This can be overriden by RoboDK settings.
+    """Robot post object defined for Motoman robots"""
+    PROG_EXT = 'JBI'             # set the program extension
+    MAX_LINES_X_PROG = 2000      # maximum number of lines per program. It will then generate multiple "pages (files)". This can be overriden by RoboDK settings.    
+    DONT_USE_MFRAME = True       # Set to false to use MFRAME for setting reference frames automatically within the program
+    DONT_USE_SETTOOL = True      # Set to false to use SETTOOL for setting the tool within the program
+    USE_RELATIVE_JOB = True      # Set to False to always use pulses (Otherwise, it might require a special/paid option
+    
     INCLUDE_SUB_PROGRAMS = True # Generate sub programs
-    JOINT_SPEED = '20%'     # set default joint speed motion
-    SPEED = '500mm/sec'     # set default cartesian speed motion  
-    CNT_VALUE = 'FINE'      # set default CNT value (all motion until smooth value is changed)
-    ACTIVE_UF = 9           # Active UFrame Id (register)
-    ACTIVE_UT = 9           # Active UTool Id (register)
-    SPARE_PR = 9            # Spare Position register for calculations
+    STR_V = 'V=100.0'         # set default cartesian speed
+    STR_VJ = 'VJ=50.00'       # set default joints speed
+    STR_PL = ''             # Rounding value (from 0 to 4) (in RoboDK, set to 100 mm rounding for PL=4
+    ACTIVE_FRAME = 9        # Active UFrame Id (register)
+    ACTIVE_TOOL = 9         # Active UTool Id (register)
+    SPARE_PR = 95           # Spare Position register for calculations
+    
+    REGISTER_DIGITS = 5
+
+    # Pulses per degree (provide these in the robot parameters menu: Double click the motoman robot in RoboDK, select "Parameters"
+    PULSES_X_DEG = [1,1,1,1,1,1] 
 
     # PROG specific variables:
-    LINE_COUNT = 0 # Count the number of instructions (limited by MAX_LINES_X_PROG)
-    P_COUNT = 0   # Count the number of P targets in one file
-    nProgs = 0    # Count the number of programs and sub programs
-    LBL_ID_COUNT = 0  # Number of labels used
+    LINE_COUNT = 0      # Count the number of instructions (limited by MAX_LINES_X_PROG)
+    P_COUNT = 0         # Count the number of P targets in one file
+    C_COUNT = 0         # Count the number of P targets in one file
+    nProgs = 0          # Count the number of programs and sub programs
+    LBL_ID_COUNT = 0    # Number of labels used
     
     # other variables
     ROBOT_POST = ''
@@ -113,8 +123,13 @@ class RobotPost(object):
     # Specific to ARC welding applications
     SPEED_BACKUP = None
     LAST_POSE = None
+    POSE_FRAME = eye(4)
+    POSE_FRAME = eye(4)
+    LAST_CONFDATA = [None, None, None, None] # [pulses(None, Pulses(0), Cartesian) ,  base(or None), tool, config]
     
     def __init__(self, robotpost=None, robotname=None, robot_axes = 6, **kwargs):
+        if self.DONT_USE_MFRAME:
+            self.ACTIVE_FRAME = None
         self.ROBOT_POST = robotpost
         self.ROBOT_NAME = robotname
         self.nAxes = robot_axes
@@ -126,7 +141,9 @@ class RobotPost(object):
                 self.MAX_LINES_X_PROG = v
             if k == 'axes_type':
                 self.AXES_TYPE = v                
-        
+            if k == 'pulses_x_deg':
+                self.PULSES_X_DEG = v    
+                
         for i in range(len(self.AXES_TYPE)):
             if self.AXES_TYPE[i] == 'T':
                 self.AXES_TRACK.append(i)
@@ -134,6 +151,7 @@ class RobotPost(object):
             elif self.AXES_TYPE[i] == 'J':
                 self.AXES_TURNTABLE.append(i)
                 self.HAS_TURNTABLE = True        
+
                 
     def ProgStart(self, progname, new_page = False):
         progname = get_safe_name(progname)
@@ -169,53 +187,53 @@ class RobotPost(object):
             self.nPages = 0
             
         #if self.nPROGS > 1:
-        #    # Fanuc does not support defining multiple programs in the same file, so one program per file
+        #    # Motoman does not support defining multiple programs in the same file, so one program per file
         #    return
         header = ''
-        header = header + ('/PROG  %s' % self.PROG_NAME_CURRENT) + '\n' # Use the latest name set at ProgStart
-        header = header + '/ATTR' + '\n'
-        header = header + 'OWNER\t\t= MNEDITOR;' + '\n'
-        header = header + 'COMMENT\t\t= "RoboDK sequence";' + '\n'
-        header = header + 'PROG_SIZE\t= 0;' + '\n'
-        header = header + 'CREATE\t\t= DATE 31-12-14  TIME 12:00:00;' + '\n'
-        header = header + 'MODIFIED\t= DATE 31-12-14  TIME 12:00:00;' + '\n'
-        header = header + 'FILE_NAME\t= ;' + '\n'
-        header = header + 'VERSION\t\t= 0;' + '\n'
-        header = header + ('LINE_COUNT\t= %i;' % (self.LINE_COUNT)) + '\n'
-        header = header + 'MEMORY_SIZE\t= 0;' + '\n'
-        header = header + 'PROTECT\t\t= READ_WRITE;' + '\n'
-        header = header + 'TCD:  STACK_SIZE\t= 0,' + '\n'
-        header = header + '      TASK_PRIORITY\t= 50,' + '\n'
-        header = header + '      TIME_SLICE\t= 0,' + '\n'
-        header = header + '      BUSY_LAMP_OFF\t= 0,' + '\n'
-        header = header + '      ABORT_REQUEST\t= 0,' + '\n'
-        header = header + '      PAUSE_REQUEST\t= 0;' + '\n'
-        header = header + 'DEFAULT_GROUP\t= 1,*,*,*,*;' + '\n'  #old controllers
-        #header = header + 'DEFAULT_GROUP\t= 1,*,*,*,*,*,*;' + '\n'
-        header = header + 'CONTROL_CODE\t= 00000000 00000000;' + '\n'
-        if self.HAS_TURNTABLE:
-            header = header + '/APPL' + '\n'
-            header = header + '' + '\n'
-            header = header + 'LINE_TRACK;' + '\n'
-            header = header + 'LINE_TRACK_SCHEDULE_NUMBER      : 0;' + '\n'
-            header = header + 'LINE_TRACK_BOUNDARY_NUMBER      : 0;' + '\n'
-            header = header + 'CONTINUE_TRACK_AT_PROG_END      : FALSE;' + '\n'
-            header = header + '' + '\n'
-        header = header + '/MN'
-        #header = header + '/MN' + '\n'    # Important! Last line should not have \n
+        header += '/JOB' + '\n'
+        header += '//NAME %s' % progname + '\n'
+        header += '//POS' + '\n'
+        header += '///NPOS %i,0,0,%i,0,0' % (self.C_COUNT, self.P_COUNT)
         
-        self.PROG.insert(0, header)
-        self.PROG.append('/POS')
-        self.PROG += self.PROG_TARGETS
-        self.PROG.append('/END')
+        # Targets are added at this point       
+        
+        import time        
+        datestr = time.strftime("%Y/%m/%d %H:%M")
+        
+        header_ins = ''
+        header_ins += '//INST' + '\n'
+        header_ins += '///DATE %s' % datestr + '\n'
+        #///DATE 2012/04/25 14:11
+        header_ins += '///COMM Generated using RoboDK\n' # comment: max 28 chars
+        if self.USE_RELATIVE_JOB:
+            header_ins += '///ATTR SC,RW,RJ' + '\n'
+            if self.ACTIVE_FRAME is not None:
+                header_ins += '///FRAME USER %i' % self.ACTIVE_FRAME + '\n'           
+        else:
+            header_ins += '///ATTR SC,RW' + '\n'
+
+        header_ins += '///GROUP1 RB1' + '\n'
+        header_ins += 'NOP'
+        #if self.HAS_TURNTABLE:
+        #    header = header + '/APPL' + '\n'
+        
+        self.PROG.insert(0, header_ins)
+        self.PROG.append('END')
+        
+        self.PROG_TARGETS.insert(0, header)
+        
+        self.PROG = self.PROG_TARGETS + self.PROG
+        
+        
         
         # Save PROG in PROG_LIST
         self.PROG_LIST.append(self.PROG)
         self.PROG = []
         self.PROG_TARGETS = []
-        #self.nLines = 0
         self.LINE_COUNT = 0
         self.P_COUNT = 0
+        self.C_COUNT = 0
+        self.LAST_CONFDATA = [None, None, None, None]
         self.LBL_ID_COUNT = 0
         
     def progsave(self, folder, progname, ask_user = False, show_result = False):
@@ -255,25 +273,7 @@ class RobotPost(object):
                 os.startfile(filesave)
             #if len(self.LOG) > 0:
             #    mbox('Program generation LOG:\n\n' + self.LOG)
-        # -------- build with MakeTP ---------
-        # set robot first with setrobot.exe (delete robot.ini file)
-        PATH_MAKE_TP = 'C:/Program Files (x86)/FANUC/WinOLPC/bin/'
-        if FileExists(PATH_MAKE_TP + 'MakeTP.exe'):
-            filesave_TP = filesave[:-3] + '.TP'
-            print("POPUP: Compiling LS file with MakeTP.exe: %s..." % progname)
-            sys.stdout.flush()
-            import subprocess
-            command = [PATH_MAKE_TP + 'MakeTP.exe', filesave.replace('/','\\'), filesave_TP.replace('/','\\'), '/config', PATH_MAKE_TP + 'robot.ini']
-            #output = subprocess.check_output(command)
-            #self.LOG = output.decode('utf-8')
-            self.LOG += 'Program generation for: ' + progname + '\n'
-            with subprocess.Popen(command, stdout=subprocess.PIPE, bufsize=1, universal_newlines=True) as p:
-                for line in p.stdout:
-                    line_ok = line.strip()
-                    self.LOG += line_ok + '\n'
-                    print("POPUP: " + line_ok)
-                    sys.stdout.flush()
-            self.LOG += '\n'
+
             
             
     def ProgSave(self, folder, progname, ask_user = False, show_result = False):
@@ -336,15 +336,12 @@ class RobotPost(object):
     def MoveJ(self, pose, joints, conf_RLF=None):
         """Add a joint movement"""
         self.page_size_control() # Important to control the maximum lines per program and not save last target on new program
-        
-        target_id = self.add_target_joints(pose, joints)
-        move_ins = 'P[%i] %s %s ;' % (target_id, self.JOINT_SPEED, self.CNT_VALUE)
-        self.addline(move_ins, 'J')
+        target_id = self.add_target_joints(joints)
+        self.addline("MOVJ C%05d %s%s" % (target_id, self.STR_VJ, self.STR_PL))                    
         self.LAST_POSE = pose
         
     def MoveL(self, pose, joints, conf_RLF=None):
-        """Add a linear movement"""
-        
+        """Add a linear movement"""        
         #if self.LAST_POSE is not None and pose is not None:
         #    # Skip adding a new movement if the new position is the same as the last one
         #    if distance(pose.Pos(), self.LAST_POSE.Pos()) < 0.1 and pose_angle_between(pose, self.LAST_POSE) < 0.1:
@@ -353,100 +350,122 @@ class RobotPost(object):
         self.page_size_control() # Important to control the maximum lines per program and not save last target on new program
                 
         if pose is None:
-            target_id = self.add_target_joints(pose, joints)
-            move_ins = 'P[%i] %s %s ;' % (target_id, self.SPEED, self.CNT_VALUE)
+            target_id = self.add_target_joints(joints)
         else:
-            target_id = self.add_target_cartesian(pose, joints, conf_RLF)
-            move_ins = 'P[%i] %s %s ;' % (target_id, self.SPEED, self.CNT_VALUE)
-            
-        self.addline(move_ins, 'L')
+            target_id = self.add_target_cartesian(self.POSE_FRAME*pose, joints, conf_RLF)
+
+        self.addline("MOVL C%05d %s%s" % (target_id, self.STR_V, self.STR_PL))        
         self.LAST_POSE = pose
         
     def MoveC(self, pose1, joints1, pose2, joints2, conf_RLF_1=None, conf_RLF_2=None):
         """Add a circular movement"""
         self.page_size_control() # Important to control the maximum lines per program and not save last target on new program
         
-        target_id1 = self.add_target_cartesian(pose1, joints1, conf_RLF_1)
-        target_id2 = self.add_target_cartesian(pose2, joints2, conf_RLF_2)
-        move_ins = 'P[%i] \n       P[%i] %s %s ;' % (target_id1, target_id2, self.SPEED, self.CNT_VALUE)
-        self.addline(move_ins, 'C')
-        self.LAST_POSE = pose2
+        if self.LAST_POSE is not None:
+            target_id0 = self.add_target_cartesian(self.POSE_FRAME*self.LAST_POSE, joints1, conf_RLF_1)
+            self.addline("MOVC C%05d %s%s" % (target_id0, self.STR_V, self.STR_PL))
         
-    def setFrame(self, pose, frame_id=None, frame_name=None):
+        target_id1 = self.add_target_cartesian(self.POSE_FRAME*pose1, joints1, conf_RLF_1)
+        target_id2 = self.add_target_cartesian(self.POSE_FRAME*pose2, joints2, conf_RLF_2)
+            
+        self.addline("MOVC C%05d %s%s" % (target_id1, self.STR_V, self.STR_PL))
+        self.addline("MOVC C%05d %s%s" % (target_id2, self.STR_V, self.STR_PL))
+        
+        self.LAST_POSE = None
+        
+    def setFrame(self, pose, frame_id, frame_name):
         """Change the robot reference frame"""
-        xyzwpr = Pose_2_Fanuc(pose)
-        if frame_id is None or frame_id < 0:            
-            for i in range(6):
-                self.addline('PR[%i,%i]=%.3f ;' % (self.SPARE_PR, i+1, xyzwpr[i]))
-            for i in range(6,self.nAxes):
-                self.addline('PR[%i,%i]=%.3f ;' % (self.SPARE_PR, i+1, 0))
-            self.addline('UFRAME[%i]=PR[%i] ;' % (self.ACTIVE_UF, self.SPARE_PR))
-            self.addline('UFRAME_NUM=%i ;' % (self.ACTIVE_UF))
+        xyzwpr = Pose_2_Motoman(pose)
+        if self.DONT_USE_MFRAME:
+            self.ACTIVE_FRAME = None
+            self.POSE_FRAME = pose
+            self.RunMessage('Using %s (targets wrt base):' % (str(frame_name)), True)
+            self.RunMessage('%.1f,%.1f,%.1f,%.1f,%.1f,%.1f' % (xyzwpr[0], xyzwpr[1], xyzwpr[2], xyzwpr[3], xyzwpr[4], xyzwpr[5]), True)
         else:
-            self.ACTIVE_UF = frame_id
-            self.addline('UFRAME_NUM=%i ;' % (self.ACTIVE_UF))
-            self.RunMessage('UF%i:%.1f,%.1f,%.1f,%.1f,%.1f,%.1f' % (frame_id, xyzwpr[0], xyzwpr[1], xyzwpr[2], xyzwpr[3], xyzwpr[4], xyzwpr[5]), True)
+            self.POSE_FRAME = eye(4)
+            if frame_id is None or frame_id < 0:
+                self.RunMessage('Setting Frame %i (%s):' % (self.ACTIVE_FRAME, str(frame_name)), True)            
+                decimals = [1000,1000,1000,100,100,100]
+                frame_calc = [eye(4), transl(200,0,0), transl(0,200,0)]
+                for m in range(3):
+                    xyzwpr_pm = Pose_2_Motoman(pose*frame_calc[m])
+                    for i in range(6):
+                        self.addline("SETE P%05d (%i) %i" % (self.SPARE_PR+m, i+1, round(xyzwpr_pm[i]*decimals[i])))
+                    for i in range(6,self.nAxes):
+                        self.addline("SETE P%05d (%i) %i" % (self.SPARE_PR+m, i+1, 0))
+                    
+                self.addline("MFRAME UF#(%i) P%05d P%05d P%05d" % (self.ACTIVE_FRAME, self.SPARE_PR, self.SPARE_PR+1, self.SPARE_PR+2))
+                    
+            else:
+                self.ACTIVE_FRAME = frame_id
+                self.RunMessage('Frame %i (%s) should be close to:' % (self.ACTIVE_FRAME, str(frame_name)), True)
+                self.RunMessage('%.1f,%.1f,%.1f,%.1f,%.1f,%.1f' % (xyzwpr[0], xyzwpr[1], xyzwpr[2], xyzwpr[3], xyzwpr[4], xyzwpr[5]), True)
         
-    def setTool(self, pose, tool_id=None, tool_name=None):
+    def setTool(self, pose, tool_id, tool_name):
         """Change the robot TCP"""
-        xyzwpr = Pose_2_Fanuc(pose)
+        xyzwpr = Pose_2_Motoman(pose)
         if tool_id is None or tool_id < 0:
-            for i in range(6):
-                self.addline('PR[%i,%i]=%.3f ;' % (self.SPARE_PR, i+1, xyzwpr[i]))
-            for i in range(6,self.nAxes):
-                self.addline('PR[%i,%i]=%.3f ;' % (self.SPARE_PR, i+1, 0))
-            self.addline('UTOOL[%i]=PR[%i] ;' % (self.ACTIVE_UT, self.SPARE_PR))
-            self.addline('UTOOL_NUM=%i ;' % (self.ACTIVE_UT))
+            if self.DONT_USE_SETTOOL:
+                self.RunMessage('Tool %s should be close to:' % (str(tool_name)), True)
+                self.RunMessage('%.1f,%.1f,%.1f,%.1f,%.1f,%.1f' % (xyzwpr[0], xyzwpr[1], xyzwpr[2], xyzwpr[3], xyzwpr[4], xyzwpr[5]), True)
+            else:
+                self.RunMessage('Setting Tool %i (%s):' % (self.ACTIVE_TOOL, str(tool_name)), True)            
+                decimals = [1000,1000,1000,100,100,100]
+                for i in range(6):
+                    self.addline("SETE P%05d (%i) %i" % (self.SPARE_PR, i+1, round(xyzwpr[i]*decimals[i])))
+                for i in range(6,self.nAxes):
+                    self.addline("SETE P%05d (%i) %i" % (self.SPARE_PR, i+1, 0))
+                    
+                self.addline("SETTOOL TL#(%i) P%05d" % (self.ACTIVE_TOOL, self.SPARE_PR))
+                
         else:
-            self.ACTIVE_UT = tool_id
-            self.addline('UTOOL_NUM=%i ;' % (self.ACTIVE_UT))
-            self.RunMessage('UT%i:%.1f,%.1f,%.1f,%.1f,%.1f,%.1f' % (tool_id, xyzwpr[0], xyzwpr[1], xyzwpr[2], xyzwpr[3], xyzwpr[4], xyzwpr[5]), True)
+            self.ACTIVE_TOOL = tool_id
+            self.RunMessage('Tool %i (%s) should be close to:' % (self.ACTIVE_TOOL, str(tool_name)), True)
+            self.RunMessage('%.1f,%.1f,%.1f,%.1f,%.1f,%.1f' % (xyzwpr[0], xyzwpr[1], xyzwpr[2], xyzwpr[3], xyzwpr[4], xyzwpr[5]), True)
         
     def Pause(self, time_ms):
         """Pause the robot program"""
         if time_ms <= 0:
-            self.addline('PAUSE ;')
+            self.addline('PAUSE')
         else:
-            self.addline('WAIT  %.2f(sec) ;' % (time_ms*0.001))
+            self.addline('TIMER T=%.2f' % (time_ms*0.001))
         
     def setSpeed(self, speed_mms):
         """Changes the robot speed (in mm/s)"""
-        if self.SPEED_BACKUP is None:
-            # Set the normal speed
-            self.SPEED = '%.0fmm/sec' % max(speed_mms, 0.01)
-            # assume 5000 mm/s as 100%
-            self.JOINT_SPEED = '%.0f%%' % max(min(100.0*speed_mms/5000.0, 100.0), 1) # Saturate percentage speed between 1 and 100
-
+        speed_cm_min = speed_mms * 60.0 / 10.0
+        speedl = max(0.01,min(speed_cm_min,200.0)) # Important! Filter linear speed is in mm/s or cm/min (otherwise the program stops)
+        if speedl < 100:
+            self.STR_V = "V=%.2f" % speedl
         else:
-            # Do not alter the speed as we are in ARC movement mode
-            # skip speed settings if it has been overriden
-            self.SPEED_BACKUP = '%.0fmm/sec' % max(speed_mms, 0.01)
-            # assume 5000 mm/s as 100%
-            self.JOINT_SPEED = '%.0f%%' % max(min(100.0*speed_mms/5000.0, 100.0), 1) # Saturate percentage speed between 1 and 100
+            self.STR_V = "V=%.1f" % speedl
     
     def setAcceleration(self, accel_mmss):
         """Changes the robot acceleration (in mm/s2)"""
-        self.addlog('setAcceleration not defined')
+        self.addlog('Set acceleration not defined')
     
     def setSpeedJoints(self, speed_degs):
         """Changes the robot joint speed (in deg/s)"""
-        self.addlog('setSpeedJoints not defined')
+        speedj = max(0.01,min(speed,100.0)) # Joint speed must be in %
+        if speedj < 100:
+            self.STR_VJ = "VJ=%.2f" % speedj
+        else:
+            self.STR_VJ = "VJ=%.1f" % speedj
     
     def setAccelerationJoints(self, accel_degss):
         """Changes the robot joint acceleration (in deg/s2)"""
-        self.addlog('setAccelerationJoints not defined')
+        self.addlog('Set acceleration not defined')
         
     def setZoneData(self, zone_mm):
         """Changes the zone data approach (makes the movement more smooth)"""
         if zone_mm < 0:
-            self.CNT_VALUE = 'FINE'
+            self.STR_PL = ''
         else:
-            self.CNT_VALUE = 'CNT%i' % round(min(zone_mm, 100.0))        
+            self.STR_PL = ' PL=%i' % round(min(zone_mm, 8))        
         
     def setDO(self, io_var, io_value):
         """Sets a variable (output) to a given value"""
         if type(io_var) != str:  # set default variable name if io_var is a number
-            io_var = 'DO[%s]' % str(io_var)        
+            io_var = 'OT#(%s)' % str(io_var)        
         if type(io_value) != str: # set default variable value if io_value is a number            
             if io_value > 0:
                 io_value = 'ON'
@@ -454,12 +473,13 @@ class RobotPost(object):
                 io_value = 'OFF'
         
         # at this point, io_var and io_value must be string values
-        self.addline('%s=%s ;' % (io_var, io_value))
+        #DOUT OT#(2) ON
+        self.addline('DOUT %s %s' % (io_var, io_value))
         
     def waitDI(self, io_var, io_value, timeout_ms=-1):
         """Waits for an input io_var to attain a given value io_value. Optionally, a timeout can be provided."""
         if type(io_var) != str:  # set default variable name if io_var is a number
-            io_var = 'DI[%s]' % str(io_var)        
+            io_var = 'IN#(%s)' % str(io_var)        
         if type(io_value) != str: # set default variable value if io_value is a number            
             if io_value > 0:
                 io_value = 'ON'
@@ -468,79 +488,43 @@ class RobotPost(object):
         
         # at this point, io_var and io_value must be string values
         if timeout_ms < 0:
-            self.addline('WAIT %s=%s ;' % (io_var, io_value))
+            #WAIT IN#(12)=ON
+            self.addline('WAIT %s=%s' % (io_var, io_value))
         else:
-            self.LBL_ID_COUNT = self.LBL_ID_COUNT + 1
-            self.addline('$WAITTMOUT=%i ;' % round(timeout_ms))
-            self.addline('WAIT %s=%s TIMEOUT, LBL[%i] ;' % (io_var, io_value, self.LBL_ID_COUNT))
-            self.addline('MESSAGE[Timed out for LBL %i] ;' % self.LBL_ID_COUNT)
-            self.addline('PAUSE ;')
-            self.addline('LBL[%i] ;' % self.LBL_ID_COUNT)
+            #self.LBL_ID_COUNT = self.LBL_ID_COUNT + 1
+            self.addline('WAIT %s=%s T=%.2f' % (io_var, io_value, timeout_ms*0.001))
        
-    def addlastline(self, add_params):
-        """Add parameters to the last command"""
-        if len(self.PROG) > 0 and self.PROG[-1].endswith(';\n'):
-            self.PROG[-1] = self.PROG[-1][:-2] + add_params + ';' # remove last 2 characters
             
     def RunCode(self, code, is_function_call = False):
         """Adds code or a function call"""
         if is_function_call:
-            code = get_safe_name(code, 12)
-            if code.startswith("ArcStart"):
-                if not code.endswith(')'):
-                    code = code + '()'
+            code = get_safe_name(code,8)
+            #if code.startswith("ArcStart"):
+                #return
                 
-                self.ARC_PARAMS = code[9:-1]
-                if len(self.ARC_PARAMS) < 1:
-                    # Use default sine wave parameters
-                    self.ARC_PARAMS = '2.0Hz,8.0mm,0.075s,0.075'
-                
-                # use desired weld speed:
-                self.SPEED_BACKUP = self.SPEED
-                self.SPEED = 'WELD_SPEED'
-                
-                # Provoke ARC START:
-                self.addlastline('Arc Start[11]')
-                
-                # Tune weave with parameters
-                self.addline('Weave Sine[%s] ;' % self.ARC_PARAMS)
-                return # Do not generate default program call
-            elif code.startswith("ArcEnd"):
-                # Provoke ARC END:
-                self.addlastline('Arc End[11]')
-                
-                # Revert to desired speed
-                self.SPEED = self.SPEED_BACKUP
-                self.SPEED_BACKUP = None
-                
-                self.ARC_PARAMS = None
-                return # Do not generate default program call
-            
             # default program call
             code.replace(' ','_')
-            self.addline('CALL %s ;' % (code))
+            self.addline('CALL JOB:%s' % (code))
         else:
-            if not code.endswith(';'):
-                code = code + ';'
+            #if code.endswith(';'):
+                #code = code[:-1]
             self.addline(code)
         
     def RunMessage(self, message, iscomment = False):
         """Add a joint movement"""
         if iscomment:
-            #pass
-            for i in range(0,len(message), 20):
-                i2 = min(i + 20, len(message))
-                self.addline('! %s ;' % message[i:i2])
+            for i in range(0,len(message), 29):
+                i2 = min(i + 29, len(message))
+                self.addline("'%s" % message[i:i2])
                 
         else:
-            for i in range(0,len(message), 20):
-                i2 = min(i + 20, len(message))
-                self.addline('MESSAGE[%s] ;' % message[i:i2])
+            for i in range(0,len(message), 25):
+                i2 = min(i + 25, len(message))
+                self.addline('MSG "%s"' % message[i:i2])
         
 # ------------------ private ----------------------
     def page_size_control(self):
         if self.LINE_COUNT >= self.MAX_LINES_X_PROG:
-            #self.nLines = 0
             self.ProgFinish(self.PROG_NAME, True)
             self.ProgStart(self.PROG_NAME, True)
 
@@ -550,11 +534,9 @@ class RobotPost(object):
         if self.nProgs > 1 and not self.INCLUDE_SUB_PROGRAMS:
             return
         
-        self.page_size_control()
-        
+        self.page_size_control()        
         self.LINE_COUNT = self.LINE_COUNT + 1
-        newline_ok = ('%4i:%s ' % (self.LINE_COUNT, movetype)) + newline            
-        self.PROG.append(newline_ok)
+        self.PROG.append(newline)
             
     def addline_targets(self, newline):
         """Add a line at the end of the program (used for targets)"""
@@ -566,121 +548,148 @@ class RobotPost(object):
             return
         self.LOG = self.LOG + newline + '\n'
         
-# ------------------ targets ----------------------         
-    def add_target_joints(self, pose, joints):
-        if self.nProgs > 1 and not self.INCLUDE_SUB_PROGRAMS:
-            return
-        self.P_COUNT = self.P_COUNT + 1
-        add_comma = ""
-        if self.HAS_TRACK:
-            add_comma = ","
-        self.addline_targets('P[%i]{' % self.P_COUNT)
-        self.addline_targets('   GP1:')
-        self.addline_targets('    UF : %i, UT : %i,    ' % (self.ACTIVE_UF, self.ACTIVE_UT))
-        self.addline_targets('\tJ1=    %.3f deg,\tJ2=    %.3f deg,\tJ3=    %.3f deg,' % (joints[0], joints[1], joints[2]))
-        self.addline_targets('\tJ4=    %.3f deg,\tJ5=    %.3f deg,\tJ6=    %.3f deg%s' % (joints[3], joints[4], joints[5], add_comma))
-        if self.HAS_TRACK:
-            # adding external axes (linear track):
-            track_str = ''
-            for i in range(len(self.AXES_TRACK)):
-                track_str = track_str + '\tE%i=%10.3f  mm,' % (i+1, joints[self.AXES_TRACK[i]])
-            track_str = track_str[:-1]
-            self.addline_targets(track_str)
-        if self.HAS_TURNTABLE:
-            # adding rotative axes (turntable):
-            self.addline_targets('   GP2:')
-            self.addline_targets('    UF : %i, UT : %i,' % (self.ACTIVE_UF, self.ACTIVE_UT))
-            turntable_str = ''
-            for i in range(len(self.AXES_TURNTABLE)):
-                turntable_str = turntable_str + '\tJ%i=%10.3f deg,' % (i+1, joints[self.AXES_TURNTABLE[i]])
-            turntable_str = turntable_str[:-1]
-            self.addline_targets(turntable_str)
-        self.addline_targets('};')
-        return self.P_COUNT
-    
-    def add_target_cartesian(self, pose, joints, conf_RLF=None):
-        if self.nProgs > 1 and not self.INCLUDE_SUB_PROGRAMS:
-            return
-        def angle_2_turn(angle):
-            if angle >= 0.0:
-                return +math.floor((+angle+180.0)/360.0)
-            else:
-                return -math.floor((-angle+180.0)/360.0)
-        #return add_target_joints(pose, joints) # using joints as targets is safer to avoid problems setting up the reference frame and configurations
-        xyzwpr = Pose_2_Fanuc(pose)                
-        config = ['N','U','T'] #normal        
-        #config= ['F','D','B'] #alternative
-        if conf_RLF is not None:
-            if conf_RLF[2] > 0:
-                config[0] = 'F' # F means axis 5 >= 0, N means axis 5 < 0
-            if conf_RLF[1] > 0:
-                config[1] = 'D'
-            if conf_RLF[0] > 0:
-                config[2] = 'B'
-                
-        turnJ1 = angle_2_turn(joints[0])
-        turnJ4 = angle_2_turn(joints[3])
-        turnJ6 = angle_2_turn(joints[5])       
-            
-        self.P_COUNT = self.P_COUNT + 1
-        add_comma = ""
-        if self.HAS_TRACK:
-            add_comma = ","
-        self.addline_targets('P[%i]{' % self.P_COUNT)
-        self.addline_targets('   GP1:')
-        self.addline_targets('    UF : %i, UT : %i,        CONFIG : \'%c %c %c, %i, %i, %i\',' % (self.ACTIVE_UF, self.ACTIVE_UT, config[0], config[1], config[2], turnJ1, turnJ4, turnJ6))        
-        self.addline_targets('\tX =%10.3f  mm,\tY =%10.3f  mm,\tZ =%10.3f  mm,' % (xyzwpr[0], xyzwpr[1], xyzwpr[2]))
-        self.addline_targets('\tW =%10.3f deg,\tP =%10.3f deg,\tR =%10.3f deg%s' % (xyzwpr[3], xyzwpr[4], xyzwpr[5], add_comma))
-        if self.HAS_TRACK:
-            # adding external axes (linear track):
-            track_str = ''
-            for i in range(len(self.AXES_TRACK)):
-                track_str = track_str + '\tE%i=%10.3f  mm,' % (i+1, joints[self.AXES_TRACK[i]])
-            track_str = track_str[:-1]
-            self.addline_targets(track_str)
-        if self.HAS_TURNTABLE:
-            # adding rotative axes (turntable):
-            self.addline_targets('   GP2:')
-            self.addline_targets('    UF : %i, UT : %i,' % (self.ACTIVE_UF, self.ACTIVE_UT))
-            turntable_str = ''
-            for i in range(len(self.AXES_TURNTABLE)):
-                turntable_str = turntable_str + '\tJ%i=%10.3f deg,' % (i+1, joints[self.AXES_TURNTABLE[i]])
-            turntable_str = turntable_str[:-1]
-            self.addline_targets(turntable_str)
-        self.addline_targets('};')
-        return self.P_COUNT
-    
-# syntax examples for joint-defined targets:
-#P[1]{
-#   GP1:
-#    UF : 1, UT : 1,    
-#    J1=    0.000 deg,    J2=    -40.966 deg,    J3=    43.328 deg,
-#    J4=    0.000 deg,    J5=    -84.792 deg,    J6=    180.000 deg
-#};
-#P[258]{
-#   GP1:
-#    UF : 6, UT : 4,
-#    J1=   -41.180 deg,    J2=   -26.810 deg,    J3=    11.060 deg,
-#    J4=  -217.400 deg,    J5=    71.740 deg,    J6=    85.790 deg,
-#    E1=     0.000 deg
-#};
+# ------------------ targets ----------------------     
 
-# syntax examples for cartesian targets:
-#P[2]{
-#   GP1:
-#    UF : 1, UT : 1,        CONFIG : 'F U T, 0, 0, 0',
-#    X =   564.871  mm,    Y =     0.000  mm,    Z =   571.832  mm,
-#    W =  -180.000 deg,    P =     0.000 deg,    R =  -180.000 deg
-#};   
-#P[8:]{
-#   GP1:
-#     UF : 9, UT : 8,      CONFIG : 'N D B, 0, 0, 0',
-#     X =     0.000  mm,   Y =   -10.000  mm,   Z =     0.000  mm,
-#     W =     0.000 deg,   P =     0.000 deg,   R =     0.000 deg
-#   GP2:
-#     UF : 9, UT : 2,
-#     J1=     0.000 deg,   J2=     0.000 deg
-#}; 
+    def setCartesian(self, confdata):
+        #self.LAST_CONFDATA = [none/pulses(0)/postype(1), base, tool, config]
+        if self.ACTIVE_FRAME is not None and self.ACTIVE_FRAME != self.LAST_CONFDATA[1]:
+            self.addline_targets("///USER %i" % self.ACTIVE_FRAME)
+            self.LAST_CONFDATA[1] = self.ACTIVE_FRAME        
+
+        if self.ACTIVE_TOOL != self.LAST_CONFDATA[2]:
+            self.addline_targets("///TOOL %i" % self.ACTIVE_TOOL)
+            self.LAST_CONFDATA[2] = self.ACTIVE_TOOL
+
+        if self.LAST_CONFDATA[0] != 2:
+            if self.ACTIVE_FRAME is not None:
+                self.addline_targets("///POSTYPE USER")
+            else:
+                self.addline_targets("///POSTYPE BASE")
+
+            self.addline_targets("///RECTAN")
+            self.addline_targets("///RCONF %s" % confdata)
+            self.LAST_CONFDATA[3] = confdata
+            
+            
+        elif self.LAST_CONFDATA[3] != confdata:
+            self.addline_targets("///RCONF %s" % confdata)
+            self.LAST_CONFDATA[3] = confdata
+
+        self.LAST_CONFDATA[0] = 2
+
+    def setPulses(self):
+        #self.LAST_CONFDATA = [none/pulses(0)/postype(1), base, tool, config]
+        if self.LAST_CONFDATA[0] is None:
+            self.addline_targets("///TOOL %i" % self.ACTIVE_TOOL)
+            self.LAST_CONFDATA[2] = self.ACTIVE_TOOL
+       
+        if self.LAST_CONFDATA[0] != 1:
+            self.addline_targets("///POSTYPE PULSE")
+            self.addline_targets("///PULSE")
+            self.LAST_CONFDATA[0] = 1
+            
+        self.LAST_CONFDATA[0] = 1
+        self.LAST_CONFDATA[1] = None
+        self.LAST_CONFDATA[2] = None
+        self.LAST_CONFDATA[3] = None
+        
+    def add_target_joints(self, joints):    
+        if self.nProgs > 1 and not self.INCLUDE_SUB_PROGRAMS:
+            return
+
+        self.setPulses()            
+        cid = self.C_COUNT
+        self.C_COUNT = self.C_COUNT + 1        
+                
+        str_pulses=[]        
+        for i in range(len(joints)):
+            str_pulses.append('%i' % round(joints[i] * self.PULSES_X_DEG[i]))
+        
+        self.addline_targets('C%05i=' % cid + ','.join(str_pulses))         
+        return cid
+    
+    def add_target_cartesian(self, pose, joints, conf_RLF):           
+        if self.nProgs > 1 and not self.INCLUDE_SUB_PROGRAMS:
+            return
+            
+        if not self.USE_RELATIVE_JOB:
+            return self.add_target_joints(joints)            
+            
+        xyzwpr = Pose_2_Motoman(pose)
+        
+        if conf_RLF is None:
+            conf_RLF = [0,0,0]
+
+        turns = [0,0,0]
+        if len(joints) >= 6:
+            turnJ4 = (joints[3]+180)//360
+            turnJ6 = (joints[5]+180)//360
+            turnJ1 = (joints[0]+180)//360
+            turns = [turnJ4, turnJ6, turnJ1]
+
+        confdata = '%i,%i,%i,%i,%i,%i,0,0' % tuple(conf_RLF[:3] + turns[:3])
+        self.setCartesian(confdata)            
+        cid = self.C_COUNT
+        self.C_COUNT = self.C_COUNT + 1        
+        self.addline_targets('C%05i=' % cid + '%.3f,%.3f,%.3f,%.2f,%.2f,%.2f' % tuple(xyzwpr))
+        return cid
+    
+#/JOB
+#//NAME TESTTCPX
+#//POS
+#///NPOS 3,0,0,19,0,0
+#///TOOL 23
+#///POSTYPE PULSE
+#///PULSE
+#C00000=2730,-84461,-101368,0,-77310,67137
+#///TOOL 13
+#C00001=76697,-73189,-80544,374,-78336,86207
+#C00002=81732,-66267,-100360,-2451,-62876,82497
+#///USER 8
+#///TOOL 23
+#///POSTYPE USER
+#///RECTAN
+#///RCONF 0,0,0,0,1,0,0,0
+#P0010=0.000,0.000,10.205,0.00,0.00,0.00
+#P0011=0.001,0.006,-9.794,-170.32,90.00,-170.32
+#///RCONF 0,0,0,0,0,0,0,0
+#P0012=13.500,0.000,0.000,0.00,0.00,0.00
+#///RCONF 0,0,0,0,1,0,0,0
+#P0015=0.000,0.000,0.000,180.00,90.00,180.00
+#///RCONF 0,0,0,0,0,0,0,0
+#P0020=0.000,0.000,0.000,-90.00,0.00,0.00
+#P0021=0.000,0.000,-5.000,0.00,0.00,0.00
+#///RCONF 1,0,0,0,0,0,0,0
+#P0022=0.004,0.003,8.297,-90.00,0.00,-90.00
+#P0023=-0.003,-0.003,-9.351,-90.00,0.00,-90.00
+#///POSTYPE BASE
+#///RCONF 0,0,0,0,0,0,0,0
+#P0024=0.000,0.000,8.824,0.00,0.00,0.00
+#///TOOL 0
+#P0026=-276.205,101.089,162.089,0.08,-83.39,-19.88
+#P0027=-276.205,101.634,162.089,179.99,-6.61,160.20
+#///USER 8
+#///TOOL 23
+#///POSTYPE USER
+#///RCONF 0,0,0,0,1,0,0,0
+#P0028=0.410,-0.016,0.147,0.00,-90.00,0.00
+#///RCONF 1,0,0,0,0,0,0,0
+#P0030=-0.004,0.001,-0.527,-90.00,0.00,-90.00
+#P0100=0.000,0.000,50.000,0.00,90.00,0.00
+#P0101=0.000,0.000,-25.000,0.00,90.00,0.00
+#P0103=0.000,0.000,25.000,-90.00,0.00,-90.00
+#P0104=0.000,0.000,-25.000,-90.00,0.00,-90.00
+#P0110=-100.000,0.000,0.000,0.00,0.00,0.00
+#P0111=0.000,0.000,200.000,0.00,0.00,0.00
+#//INST
+#///DATE 2012/04/25 14:11
+#///COMM 1ER PROGRAM POUR VERIFIER LE TCP
+#///ATTR SC,RW
+#///GROUP1 RB1
+#NOP
+#DOUT OT#(5) ON
+#DOUT OT#(2) ON
+ 
 
 
 
@@ -702,12 +711,12 @@ def Pose(xyzrpw):
 def test_post():
     """Test the post with a basic program"""
 
-    robot = RobotPost('Fanuc_custom', 'Fanuc robot', 6)
+    robot = RobotPost('Motomantest', 'Motoman robot', 6)
 
     robot.ProgStart("Program")
     robot.RunMessage("Program generated by RoboDK", True)
-    robot.setFrame(Pose([807.766544, -963.699898, 41.478944, 0, 0, 0]))
-    robot.setTool(Pose([62.5, -108.253175, 100, -60, 90, 0]))
+    robot.setFrame(Pose([807.766544, -963.699898, 41.478944, 0, 0, 0]), None, 0)
+    robot.setTool(Pose([62.5, -108.253175, 100, -60, 90, 0]), None, 0)
     robot.MoveJ(Pose([200, 200, 500, 180, 0, 180]), [-46.18419, -6.77518, -20.54925, 71.38674, 49.58727, -302.54752] )
     robot.MoveL(Pose([200, 250, 348.734575, 180, 0, -150]), [-41.62707, -8.89064, -30.01809, 60.62329, 49.66749, -258.98418] )
     robot.MoveL(Pose([200, 200, 262.132034, 180, 0, -150]), [-43.73892, -3.91728, -35.77935, 58.57566, 54.11615, -253.81122] )

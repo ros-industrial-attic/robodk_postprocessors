@@ -37,7 +37,7 @@
 # ----------------------------------------------------
 # More information about RoboDK Post Processors and Offline Programming here:
 #     http://www.robodk.com/help#PostProcessor
-#     http://www.robodk.com/doc/PythonAPI/postprocessor.html
+#     http://www.robodk.com/doc/en/PythonAPI/postprocessor.html
 # ----------------------------------------------------
 
 
@@ -61,8 +61,8 @@ def angles_2_str(angles):
 # Object class that handles the robot instructions/syntax
 class RobotPost(object):
     """Robot post object"""
-    BASE_PROGNAME = 'MZ07L-01-A'
-    MAX_LINES_X_PROG = 950 # maximum number of lines per program
+    BASE_PROGNAME = None #'MZ07L-01-A'
+    MAX_LINES_X_PROG = 95000 # maximum number of lines per program
     PROG_ID = 5          # Program ID to store the program
     nPROGS = 0
     SKIP_OUTPUT = False
@@ -89,6 +89,16 @@ class RobotPost(object):
         self.PROG = ''
         self.LOG = ''
         self.nAxes = robot_axes
+        if self.BASE_PROGNAME is None and type(robotname) == str:
+            robotnamelist = robotname.split(' ')
+            if len(robotnamelist) > 1:
+                self.BASE_PROGNAME = robotnamelist[1] + '-01-A'
+            else:
+                self.BASE_PROGNAME = 'MZ07L-01-A'
+                
+        for k,v in kwargs.items():
+            if k == 'lines_x_prog':
+                self.MAX_LINES_X_PROG = v    
         
     def ProgStart(self, progname, generate_sub_program=False):
         if self.nPROGS > 0 and not generate_sub_program:
@@ -130,11 +140,13 @@ class RobotPost(object):
         self.PROG_FILES = []
         if self.nPROGS > 1: # save multiple programs
             self.PROGS.append(self.PROG)
-            self.nPROGS = self.nPROGS + 1
-            mainprog = '\' Main program %s calls %.0f subprograms\n' % (self.PROGRAM_NAME, float(self.nPROGS))
-            for i in range(len(self.PROGS)):
+            #self.nPROGS = self.nPROGS + 1 # Not required: We already added the counter
+            self.nPROGS = len(self.PROGS)
+            mainprog = '\' Main program %s calls %i subprograms\n' % (self.PROGRAM_NAME, self.nPROGS)
+            for i in range(self.nPROGS):
                 fsavei = ('%s/%s.%03i' % (folder, progname_base, self.PROG_ID+i+1))
-                mainprog = mainprog + ('%s.%03i\n' % (progname_base, self.PROG_ID+i+1))
+                #mainprog = mainprog + ('%s.%03i\n' % (progname_base, self.PROG_ID+i+1))
+                mainprog += 'CALLP [%03i]\n' % (self.PROG_ID+i+1)
                 fid = open(fsavei, "w")
                 fid.write(self.PROGS[i])
                 fid.close()
@@ -161,6 +173,9 @@ class RobotPost(object):
                 import subprocess
                 for file in self.PROG_FILES:
                     p = subprocess.Popen([show_result, file])
+            elif type(show_result) is list:
+                import subprocess
+                p = subprocess.Popen(show_result + [filesave])   
             else:
                 # open file with default application
                 import os
@@ -182,7 +197,10 @@ class RobotPost(object):
     def MoveL(self, pose, joints, conf_RLF=None):
         """Add a linear movement"""
         #MOVEX A=1,M1J,L,(0,90,-90,0),R= 5.0,H=1,MS
-        self.addline('MOVEX M1X,L,%s,S=%.2f,H=%i,MS' % (pose_2_str(pose,joints,self.REF_FRAME) , self.SPEED_MMS , self.TOOL_ID))
+        if pose is None:
+            self.addline('MOVEX M1J,L,%s,S=%.2f,H=%i,MS' % (angles_2_str(joints) , self.SPEED_MMS , self.TOOL_ID))
+        else:
+            self.addline('MOVEX M1X,L,%s,S=%.2f,H=%i,MS' % (pose_2_str(pose,joints,self.REF_FRAME) , self.SPEED_MMS , self.TOOL_ID))
         
     def MoveC(self, pose1, joints1, pose2, joints2, conf_RLF_1=None, conf_RLF_2=None):
         """Add a circular movement"""
@@ -206,8 +224,8 @@ class RobotPost(object):
     def setTool(self, pose, tool_id=None, tool_name=None):
         """Change the robot TCP"""
         #self.addline('TOOL[%i]=%s' % (self.TOOL_ID , pose_2_str(pose)))
-        if tool_id is None:
-            tool_id = 0
+        if tool_id is None or tool_id < 0:
+            tool_id = 1
         self.TOOL_ID = tool_id
         self.RunMessage('Using the tool:', True)
         self.RunMessage('TOOL%i=%s' % (self.TOOL_ID , pose_2_str(pose)), True)
@@ -257,39 +275,43 @@ class RobotPost(object):
         
     def setDO(self, io_var, io_value):
         """Sets a variable (output) to a given value"""
+        setreset = "SET"
         if type(io_var) != str:  # set default variable name if io_var is a number
-            io_var = 'O%s' % str(io_var)        
+            io_var = '[%02i]' % int(io_var)
         if type(io_value) != str: # set default variable value if io_value is a number            
             if io_value > 0:
-                io_value = '1'
+                setreset = "SET"
             else:
-                io_value = '0'
+                setreset = "RESET"
         
         # at this point, io_var and io_value must be string values
-        self.addline('SETM %s,%s' % (io_var, io_value))
+        #self.addline('SETM %s,%s' % (io_var, io_value))
+        self.addline('%s %s' % (setreset, io_var))
         
     def waitDI(self, io_var, io_value, timeout_ms=-1):
         """Waits for an input io_var to attain a given value io_value. Optionally, a timeout can be provided."""
+        waitij = ""
         if type(io_var) != str:  # set default variable name if io_var is a number
-            io_var = 'I%s' % str(io_var)        
+            io_var = '[%02i]' % (int(io_var))
         if type(io_value) != str: # set default variable value if io_value is a number            
             if io_value > 0:
-                io_value = '1'
+                waitij = 'WAITI'
             else:
-                io_value = '0'
-                self.addlog('Warning! Can NOT wait for a signal to be 0 (%s), WAITI will wait for a signal to become active' % io_var)
+                waitij = 'WAITJ'
         
         # at this point, io_var and io_value must be string values
-        if timeout_ms < 0:
-            self.addline('WAITI %s' % (io_var))
-        else:
-            self.addline('WAITI %s' % (io_var)) 
+        self.addline('%s %s' % (waitij, io_var))
+        #if timeout_ms < 0:
+        #    self.addline('WAITI %s' % (io_var))
+        #else:
+        #    self.addline('WAITI %s' % (io_var)) 
         
     def RunCode(self, code, is_function_call = False):
         """Adds code or a function call"""
         if is_function_call:
             self.RunMessage('Call program %s:' % code, True) # comment
-            self.addline('%s.%i' % (self.BASE_PROGNAME , name_2_id(code)))
+            #self.addline('%s.%i' % (self.BASE_PROGNAME , name_2_id(code)))
+            self.addline('CALLP %03i' % (name_2_id(code)))
             #code.replace(' ','_')            
             #if code.find('(') < 0:
             #    code = code + '()'            
@@ -315,9 +337,8 @@ class RobotPost(object):
             self.PROGS.append(self.PROG)
             self.ProgStart(self.PROGRAM_NAME, True)
         #-----------------------
-        self.PROG = self.PROG + self.TAB + newline + '\n'
-        self.CURRENT_LINES = self.CURRENT_LINES + 1  
-            
+        self.PROG += self.TAB + newline + '\n'
+        self.CURRENT_LINES = self.CURRENT_LINES + 1            
         
     def addlog(self, newline):
         """Add a log message"""

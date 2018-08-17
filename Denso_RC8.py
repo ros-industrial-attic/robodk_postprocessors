@@ -11,7 +11,7 @@
 
 # ----------------------------------------------------
 # This file is POST PROCESSOR for Robot Offline Programming to generate programs
-# for Denso robots using RC8 controller
+# for Denso robots using RC8 controller (PACScript programming)
 #
 # To edit/test this POST PROCESSOR script file:
 # Select "Program"->"Add/Edit Post Processor", then select your post or create a new one.
@@ -37,7 +37,7 @@
 # ----------------------------------------------------
 # More information about RoboDK Post Processors and Offline Programming here:
 #     http://www.robodk.com/help#PostProcessor
-#     http://www.robodk.com/doc/PythonAPI/postprocessor.html
+#     http://www.robodk.com/doc/en/PythonAPI/postprocessor.html
 # ----------------------------------------------------
 
 
@@ -71,6 +71,7 @@ class RobotPost(object):
     nAxes = 6
     TAB = ''
     SPEED_MPS = 10
+    PASS = '@0' # Nothing = default = '@0'
     ACTIVE_TOOL = 2
     ACTIVE_WOBJ = 3
     nProgs = 0
@@ -117,6 +118,9 @@ class RobotPost(object):
                 # Open file with provided application
                 import subprocess
                 p = subprocess.Popen([show_result, filesave])
+            elif type(show_result) is list:
+                import subprocess
+                p = subprocess.Popen(show_result + [filesave])   
             else:
                 # open file with default application
                 import os
@@ -132,18 +136,21 @@ class RobotPost(object):
     def MoveJ(self, pose, joints, conf_RLF=None):
         """Add a joint movement"""
         #MOVE P, @P J(20.007, 70.475, 85.691, -137.266, 18.729, 64.496), Speed=20
-        self.addline('MOVE P, @P %s, Speed=20' % joints_2_str(joints))
+        self.addline('MOVE P, %s %s, Speed=20' % (self.PASS, joints_2_str(joints)))
         
     def MoveL(self, pose, joints, conf_RLF=None):
         """Add a linear movement"""
         #MOVE L,@P P( -28.99, 20, 67.243, -90, -50.442, -180)
-        self.addline('MOVE L, @P %s, Speed=Mps(%.1f)' % (pose_2_str(pose), self.SPEED_MPS))
+        if pose is None:
+            self.addline('MOVE L, %s %s, Speed=20' % (self.PASS, joints_2_str(joints)))
+        else:
+            self.addline('MOVE L, %s %s, Speed=Mps(%.1f)' % (self.PASS, pose_2_str(pose), self.SPEED_MPS))
         
     def MoveC(self, pose1, joints1, pose2, joints2, conf_RLF_1=None, conf_RLF_2=None):
         """Add a circular movement"""
         #self.addlog('Circular move is not supported!')
         #MOVE C, P( -25.306, 20, 68.895, -90, -49.948, -180),@[5] P( -19.256, 20, 62, -90, -50.06, -180), Speed=Mps(3)
-        self.addline('MOVE C, %s,@[5] %s, Speed=Mps(%.1f)' % (pose_2_str(pose1), pose_2_str(pose1), self.SPEED_MPS))
+        self.addline('MOVE C, %s,%s %s, Speed=Mps(%.1f)' % (pose_2_str(pose1), self.PASS, pose_2_str(pose1), self.SPEED_MPS))
         
     def setFrame(self, pose, frame_id=None, frame_name=None):
         """Change the robot reference frame"""
@@ -162,9 +169,9 @@ class RobotPost(object):
     def Pause(self, time_ms):
         """Pause the robot program"""
         if time_ms <= 0:
-            self.addline('PAUSE')
+            self.addline('PAUSE') # Important for calibration
         else:
-            self.addline('DELAY %.3f' % (time_ms*0.001))
+            self.addline('DELAY %i' % time_ms)
     
     def setSpeed(self, speed_mms):
         """Changes the robot speed (in mm/s)"""
@@ -175,47 +182,56 @@ class RobotPost(object):
         # Warning! Here, acceleration in mmss is considered as a percentage!
         #accel_percentage = min(100,max(0,accel_mmss))
         #self.addline('ACCEL %.1f, %.1f' % (accel_percentage, accel_percentage))
+        pass
     
     def setSpeedJoints(self, speed_degs):
         """Changes the robot joint speed (in deg/s)"""
         #self.addlog('setSpeedJoints not defined')
+        pass
     
     def setAccelerationJoints(self, accel_degss):
         """Changes the robot joint acceleration (in deg/s2)"""
         #self.addlog('setAccelerationJoints not defined')
+        pass
         
     def setZoneData(self, zone_mm):
         """Changes the zone data approach (makes the movement more smooth)"""
         #self.addlog('setZoneData not defined (%.1f mm)' % zone_mm)
+        # Encoder value check / pass @0 (fine), @P (approximated), @value (pulse value approximation) or @E
+        if zone_mm <=0:
+            self.PASS = '@0'
+        else:
+            self.PASS = '@P'
+            #self.PASS = '@[%i]' % zone_mm # Define zone data in pulses
         
     def setDO(self, io_var, io_value):
         """Sets a variable (output) to a given value"""
         if type(io_var) != str:  # set default variable name if io_var is a number
-            io_var = 'OUT[%s]' % str(io_var)        
+            io_var = 'IO[%s]' % str(io_var)        
         if type(io_value) != str: # set default variable value if io_value is a number            
             if io_value > 0:
-                io_value = 'TRUE'
+                io_value = 'ON'
             else:
-                io_value = 'FALSE'
+                io_value = 'OFF'
         
         # at this point, io_var and io_value must be string values
-        self.addline('%s=%s' % (io_var, io_value))
+        self.addline('OUT %s = %s' % (io_var, io_value))
         
     def waitDI(self, io_var, io_value, timeout_ms=-1):
         """Waits for an input io_var to attain a given value io_value. Optionally, a timeout can be provided."""
         if type(io_var) != str:  # set default variable name if io_var is a number
-            io_var = 'IN[%s]' % str(io_var)        
+            io_var = 'IO[%s]' % str(io_var)        
         if type(io_value) != str: # set default variable value if io_value is a number            
             if io_value > 0:
-                io_value = 'TRUE'
+                io_value = 'ON'
             else:
-                io_value = 'FALSE'
+                io_value = 'OFF'
         
         # at this point, io_var and io_value must be string values
         if timeout_ms < 0:
-            self.addline('WAIT FOR %s==%s' % (io_var, io_value))
+            self.addline('WAIT %s = %s' % (io_var, io_value))
         else:
-            self.addline('WAIT FOR %s==%s TIMEOUT=%.1f' % (io_var, io_value, timeout_ms))   
+            self.addline('WAIT %s = %s, %.0f' % (io_var, io_value, timeout_ms))   
         
     def RunCode(self, code, is_function_call = False):
         """Adds code or a function call"""

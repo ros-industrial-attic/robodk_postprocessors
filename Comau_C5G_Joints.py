@@ -361,6 +361,7 @@ class RobotPost(object):
         
     def MoveL(self, pose, joints, conf_RLF=None):
         """Add a linear movement"""
+        pose = None
         # Filter sending the same movement twice
         if self.LAST_POSE is not None and pose is not None:
             # Skip adding a new movement if the new position is the same as the last one

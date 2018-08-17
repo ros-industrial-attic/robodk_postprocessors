@@ -11,7 +11,7 @@
 
 # ----------------------------------------------------
 # This file is a POST PROCESSOR for Robot Offline Programming to generate programs 
-# for a Staubli (VAL3) robot with RoboDK
+# for a Staubli (VAL3) robot with RoboDK. This post is made to properly support Staubli's external axes
 #
 # To edit/test this POST PROCESSOR script file:
 # Select "Program"->"Add/Edit Post Processor", then select your post or create a new one.
@@ -54,6 +54,7 @@ PROGRAM_PJX = '''<?xml version="1.0" encoding="utf-8" ?>
   <Programs>
     <Program file="start.pgx" />
     <Program file="stop.pgx" />
+    <Program file="setLink.pgx" />
   </Programs>
   <Database>
     <Data file="%s.dtx" />
@@ -68,6 +69,7 @@ PROGRAM_PJX_MAIN = '''<?xml version="1.0" encoding="utf-8" ?>
   <Parameters version="s7.3.1" stackSize="5000" millimeterUnit="true" />
   <Programs>
     <Program file="loadNextOne.pgx" />
+    <Program file="main.pgx" />
     <Program file="start.pgx" />
     <Program file="stop.pgx" />
   </Programs>
@@ -77,9 +79,22 @@ PROGRAM_PJX_MAIN = '''<?xml version="1.0" encoding="utf-8" ?>
   <Libraries>
     <Library alias="prog" path="./%s.pjx" />
     <Library alias="prog_swap" path="./%s.pjx" />
-    <Library alias="tooldata" path="saveChangeTool" />
   </Libraries>
-</Project>'''
+</Project>
+'''
+
+START_PGX_MAIN = '''<?xml version="1.0" encoding="utf-8"?>
+<Programs xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://www.staubli.com/robotics/VAL3/Program/2">
+  <Program name="start" access="public">
+    <Code><![CDATA[
+begin
+  $XframeLink(frExternal)
+  call main(frExternal)
+end
+      ]]></Code>
+  </Program>
+</Programs>
+'''
 
 DATA_DTX = '''<?xml version="1.0" encoding="utf-8" ?>
 <Database xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://www.staubli.com/robotics/VAL3/Data/2">
@@ -87,25 +102,21 @@ DATA_DTX = '''<?xml version="1.0" encoding="utf-8" ?>
     <Data name="%s" access="public" xsi:type="array" type="frame" size="%i">
 %s    </Data>
     <Data name="jPark" access="public" xsi:type="array" type="jointRx" size="1">
-      <Value key="0" j1="0.000" j2="0.000" j3="90.000" j4="0.000" j5="90.000" j6="0.000" />
+      <Value key="0" j3="90" j5="90" />
     </Data>
     <Data name="%s" access="public" xsi:type="array" type="jointRx" size="%i">
 %s    </Data>
     <Data name="mNomSpeed" access="public" xsi:type="array" type="mdesc" size="1">
-      <Value key="0" accel="100" vel="100" decel="100" tmax="99999" rmax="99999" blend="off" leave="50" reach="50" />
+      <Value key="0" blend="off" />
     </Data>
     <Data name="%s" access="public" xsi:type="array" type="mdesc" size="%i">
 %s    </Data>
     <Data name="nTraj" access="public" xsi:type="array" type="num" size="1"/>
-    <Data name="nTimeStop" access="private" xsi:type="array" type="num" size="1"/>
-    <Data name="nTimeStart" access="private" xsi:type="array" type="num" size="1"/>
-    <Data name="nMode" access="private" xsi:type="array" type="num" size="1"/>
-    <Data name="nEtat" access="private" xsi:type="array" type="num" size="1"/>
     <Data name="%s" access="public" xsi:type="array" type="pointRx" size="%i">
 %s    </Data>
     <Data name="%s" access="public" xsi:type="array" type="tool" size="%i">
 %s    </Data>
-  </Datas>
+%s  </Datas>
 </Database>
 '''
 
@@ -133,7 +144,7 @@ DATA_DTX_MAIN = '''<?xml version="1.0" encoding="utf-8" ?>
       <Value key="0" x="0" y="0" z="0" rx="0" ry="0" rz="0" fatherId="fPartCad[0]" />
     </Data>
     <Data name="mNomSpeed" access="public" xsi:type="array" type="mdesc" size="1">
-      <Value key="0" accel="100" vel="100" decel="100" tmax="99999" rmax="99999" blend="off" leave="50" reach="50" />
+      <Value key="0" blend="off" />
     </Data>
     <Data name="nTraj" access="public" xsi:type="array" type="num" size="1"/>
     <Data name="nTimeStop" access="private" xsi:type="array" type="num" size="1"/>
@@ -142,6 +153,15 @@ DATA_DTX_MAIN = '''<?xml version="1.0" encoding="utf-8" ?>
     <Data name="nEtat" access="private" xsi:type="array" type="num" size="1"/>
     <Data name="tCad" access="public" xsi:type="array" type="tool" size="1">
 %s    </Data>
+    <Data name="frExternal" access="public" xsi:type="array" type="frame" size="1">
+      <Value key="0" %s fatherId="world[0]" />
+    </Data>
+    <Data name="fWorld0" access="public" xsi:type="array" type="frame" size="1">
+      <Value key="0" fatherId="world[0]" />
+    </Data>
+    <Data name="tAdjust" access="public" xsi:type="array" type="tool" size="1">
+      <Value key="0" ioLink="valve1" />
+    </Data>
   </Datas>
 </Database>
 '''
@@ -152,7 +172,34 @@ START_PGX = '''<?xml version="1.0" encoding="utf-8" ?>
   <Program name="start" access="public">
     <Code><![CDATA[
 begin
+%s 
+end
+      ]]></Code>
+  </Program>
+</Programs>
+'''
+
+# For the main program that calls subprograms
+MAIN_PGX = '''<?xml version="1.0" encoding="utf-8"?>
+<Programs xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://www.staubli.com/robotics/VAL3/Program/2">
+  <Program name="main" access="public">
+    <Parameters xmlns="http://www.staubli.com/robotics/VAL3/Param/1">
+      <Parameter name="x_fCellule" type="frame" xsi:type="element" use="reference" />
+    </Parameters>
+    <Locals>
+      <Local name="l_nRef0" type="num" xsi:type="array" size="1" />
+      <Local name="l_nResult" type="num" xsi:type="array" size="1" />
+    </Locals>
+    <Code><![CDATA[
+begin
+ 
+ 
+  link(fWorld0,x_fCellule)
+  l_nRef0 =0
+  fWorld0.trsf = $Xposition(world,x_fCellule,l_nRef0)
+ 
 %s
+ 
 end
       ]]></Code>
   </Program>
@@ -185,7 +232,23 @@ begin
 end
       ]]></Code>
   </Program>
-</Programs>'''
+</Programs>
+'''
+
+SETLINK_PGX = '''<?xml version="1.0" encoding="utf-8"?>
+<Programs xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://www.staubli.com/robotics/VAL3/Program/2">
+  <Program name="setLink" access="public">
+    <Parameters xmlns="http://www.staubli.com/robotics/VAL3/Param/1">
+      <Parameter name="x_fCellule" type="frame" xsi:type="element" use="reference" />
+    </Parameters>
+    <Code><![CDATA[
+begin
+  link(fPartReal,x_fCellule)
+end
+      ]]></Code>
+  </Program>
+</Programs>
+'''
 
 
 def Pose_2_Staubli_v2(H):
@@ -247,6 +310,9 @@ def getSaveFolder(strdir='C:\\', strtitle='Save program folder ...'):
 # Object class that handles the robot instructions/syntax
 class RobotPost(object):
     """Robot post object"""    
+    # Important: Enter the location of the external axis:
+    FR_EXTERNAL_POSE = transl(678,0,0)
+    
     # other variables
     ROBOT_POST = ''
     ROBOT_NAME = ''
@@ -277,6 +343,8 @@ class RobotPost(object):
     TOOL_CURRENT = 'flange[0]'
     TOOL_DATA = ''
     TOOL_COUNT = 0
+    OTHER_DATA = '' # ntargets
+    OTHER_COUNT = 0
     SPEED_NAME = 'mSpeed'
     SPEED_CURRENT = 'mNomSpeed'
     SPEED_DATA = ''
@@ -294,6 +362,13 @@ class RobotPost(object):
         self.PROG = ''
         self.LOG = ''
         self.nAxes = robot_axes
+        for k,v in kwargs.items():
+            if k == 'pose_turntable':
+                pose_turntable = v
+                self.FR_EXTERNAL_POSE = pose_turntable
+            elif k == 'pose_rail':
+                pose_rail = v
+                #self.FR_RAIL_POSE = pose_rail        
         
     def ProgStart(self, progname):
         self.PROG_NAME = progname
@@ -465,19 +540,28 @@ class RobotPost(object):
                 call_sequence+=('  endIf\n')
                 call_sequence+=('  wait(taskStatus("loading")==-1)\n')
                 if i < nprogs-1:
-                    call_sequence+=('  taskCreate "loading",10,loadNextOne("./%s")\n' % self.PROG_NAME_LIST[i+1])                    
+                    call_sequence+=('  taskCreate "loading",10,loadNextOne("./%s")\n' % self.PROG_NAME_LIST[i+1])
                 call_sequence+=('  prog:fPartReal.trsf=fPartCad.trsf*fCadToReal.trsf\n')
-                call_sequence+=('  prog:tCad.trsf=prog:tCad.trsf*{0,0,tooldata:nLength,0,0,0}\n')               
+                #call_sequence+=('  prog:tCad.trsf=prog:tCad.trsf*tAdjust.trsf\n')
+                call_sequence+=('  prog:tCad.trsf=tCad.trsf*tAdjust.trsf\n')
+                call_sequence+=('  call prog:setLink(fWorld0)\n')
                 call_sequence+=('  call prog:start()\n')
                 call_sequence+=('  \n')
-
+            
             #-----------------------------------
-            # start.pgx
+            # start.pgx (static file)
             start_file = folderprog + '/start.pgx'
             show_file_list.append(start_file)
             fid = open(start_file, "w")
-            fid.write(START_PGX % call_sequence)
+            fid.write(START_PGX_MAIN)
             fid.close()
+            #-----------------------------------
+            # main.pgx
+            start_file = folderprog + '/main.pgx'
+            show_file_list.append(start_file)
+            fid = open(start_file, "w")
+            fid.write(MAIN_PGX % call_sequence)
+            fid.close()            
             #-----------------------------------
             # mainprog.pjx
             project_file = folderprog + '/%s.pjx' % main_progname
@@ -492,7 +576,7 @@ class RobotPost(object):
             program_data = folderprog + '/%s.dtx' % main_progname
             show_file_list.append(project_file)
             fid = open(program_data, "w")
-            fid.write(DATA_DTX_MAIN % (self.REF_DATA, self.TOOL_DATA))
+            fid.write(DATA_DTX_MAIN % (self.REF_DATA, self.TOOL_DATA, pose_2_str(self.FR_EXTERNAL_POSE)))
             fid.close()
             #-----------------------------------
             # stop.pgx
@@ -530,6 +614,12 @@ class RobotPost(object):
             stop_file = folderprog_final + '/stop.pgx'
             fid = open(stop_file, "w")
             fid.write(STOP_PGX)
+            fid.close()            
+            #-----------------------------------
+            # setLink.pgx
+            setlink_file = folderprog_final + '/setLink.pgx'
+            fid = open(setlink_file, "w")
+            fid.write(SETLINK_PGX)
             fid.close()
             #-----------------------------------
             # program.pjx
@@ -582,10 +672,23 @@ class RobotPost(object):
         #nTraj=movej(jJoints[0],tTool[0],mSpeed[0])
         #waitEndMove()
         #      <Value key="0" j1="0.000" j2="-10.000" j3="100.000" j4="0.000" j5="0.000" j6="-90.000" />
+        nextax = len(joints) - 6
+        var_extax = ''
+        if nextax > 0:
+            var_extax = 'nTargetJoints%i' % self.OTHER_COUNT
+            self.OTHER_COUNT = self.OTHER_COUNT + 1
+            self.OTHER_DATA += '    <Data name="%s" access="private" xsi:type="array" type="num" size="%i">\n' % (var_extax, nextax)
+            for i in range(nextax):
+                self.OTHER_DATA += '      <Value key="%i" value="%.3f" />\n' % (i, joints[i+6])
+            self.OTHER_DATA += '    </Data>\n'
+            
         variable = '%s[%i]' % (self.JOINT_NAME, self.JOINT_COUNT)	
         self.JOINT_DATA = self.JOINT_DATA + '      <Value key="%i" %s />\n' % (self.JOINT_COUNT, angles_2_str(joints))
-        self.JOINT_COUNT = self.JOINT_COUNT + 1        
-        self.addline('nTraj=movej(%s,%s,%s)' % (variable, self.TOOL_CURRENT, self.SPEED_CURRENT))
+        self.JOINT_COUNT = self.JOINT_COUNT + 1
+        if nextax > 0:
+            self.addline('nTraj=$Xmovej(%s,%s[0],%s,%s)' % (variable, var_extax, self.TOOL_CURRENT, self.SPEED_CURRENT))        
+        else:
+            self.addline('nTraj=movej(%s,%s,%s)' % (variable, self.TOOL_CURRENT, self.SPEED_CURRENT))
         #self.addline('waitEndMove()')
         
     def MoveL(self, pose, joints, conf_RLF=None):
@@ -595,6 +698,16 @@ class RobotPost(object):
         #waitEndMove()
         #      <Value key="0" x="-36.802" y="-6.159" z="500.000" rx="135.407" ry="80.416" rz="46.453" shoulder="lefty" elbow="epositive" wrist="wpositive" fatherId="fPartReal[0]" />
         # Configuration needs to be checked for older RoboDK versions
+        nextax = len(joints) - 6
+        var_extax = ''
+        if nextax > 0:
+            var_extax = 'nTarget%i' % self.OTHER_COUNT
+            self.OTHER_COUNT = self.OTHER_COUNT + 1
+            self.OTHER_DATA += '    <Data name="%s" access="private" xsi:type="array" type="num" size="%i">\n' % (var_extax, nextax)
+            for i in range(nextax):
+                self.OTHER_DATA += '      <Value key="%i" value="%.3f" />\n' % (i, joints[i+6])
+            self.OTHER_DATA += '    </Data>\n'
+        
         if conf_RLF == None:
             str_config = 'shoulder="lefty" elbow="epositive" wrist="wpositive"'
         else:
@@ -602,8 +715,12 @@ class RobotPost(object):
             str_config = 'shoulder="%s" elbow="%s" wrist="%s"' % ("righty" if rear>0 else "lefty", "enegative" if lowerarm>0 else "epositive", "wnegative" if flip>0 else "wpositive")
         variable = '%s[%i]' % (self.POINT_NAME, self.POINT_COUNT)
         self.POINT_DATA = self.POINT_DATA + '      <Value key="%i" %s %s fatherId="%s" />\n' % (self.POINT_COUNT, pose_2_str(pose), str_config, self.REF_CURRENT)
-        self.POINT_COUNT = self.POINT_COUNT + 1        
-        self.addline('nTraj=movel(%s,%s,%s)' % (variable, self.TOOL_CURRENT, self.SPEED_CURRENT))
+        self.POINT_COUNT = self.POINT_COUNT + 1
+        if nextax > 0:
+            self.addline('nTraj=$Xmovel(%s,%s[0],%s,%s)' % (variable, var_extax, self.TOOL_CURRENT, self.SPEED_CURRENT))        
+        else:
+            self.addline('nTraj=movel(%s,%s,%s)' % (variable, self.TOOL_CURRENT, self.SPEED_CURRENT))        
+
         
     def MoveC(self, pose1, joints1, pose2, joints2, conf_RLF_1=None, conf_RLF_2=None):
         """Add a circular movement"""
@@ -631,7 +748,7 @@ class RobotPost(object):
         self.REF = pose
         #      <Value key="0" x="600.000" y="0.000" z="-465.000" rx="0.400" ry="0.100" rz="-45.000" fatherId="world[0]" />
         self.REF_CURRENT = '%s[%i]' % (self.REF_NAME, self.REF_COUNT)
-        self.REF_DATA = self.REF_DATA + '      <Value key="%i" %s fatherId="world[0]" />\n' % (self.REF_COUNT, pose_2_str(pose))
+        self.REF_DATA = self.REF_DATA + '      <Value key="%i" %s fatherId="world[0]" />\n' % (self.REF_COUNT, pose_2_str(self.FR_EXTERNAL_POSE*pose))
         self.REF_COUNT = self.REF_COUNT + 1
         
     def setTool(self, pose, tool_id=None, tool_name=None):
@@ -663,7 +780,7 @@ class RobotPost(object):
         self.SPEED_CURRENT = '%s[%i]' % (self.SPEED_NAME, self.SPEED_COUNT)
         # blend = "off" / "joint" / "Cartesian"
         #self.SPEED_DATA = self.SPEED_DATA + '      <Value key="%i" accel="100" vel="100" decel="100" tmax="%.1f" rmax="100" blend="cartesian" leave="%.1f" reach="%0.1f" />\n' % (self.SPEED_COUNT, speed_mms, self.SMOOTH, self.SMOOTH)
-        self.SPEED_DATA = self.SPEED_DATA + '      <Value key="%i" tmax="%.1f" rmax="100" leave="%.1f" reach="%0.1f" blend="cartesian" />\n' % (self.SPEED_COUNT, speed_mms, self.SMOOTH, self.SMOOTH)
+        self.SPEED_DATA = self.SPEED_DATA + '      <Value key="%i" tmax="%.1f" rmax="100" leave="%.1f" reach="%0.1f" />\n' % (self.SPEED_COUNT, speed_mms, self.SMOOTH, self.SMOOTH)
         self.SPEED_COUNT = self.SPEED_COUNT + 1
     
     def setAcceleration(self, accel_mmss):
@@ -757,7 +874,7 @@ class RobotPost(object):
             progname = progname + ('%i' % (nprogs+1))
             
         self.PROG_PGX_LIST.append(START_PGX % self.PROG_PGX)
-        self.PROG_DTX_LIST.append(DATA_DTX % (self.REF_NAME, self.REF_COUNT, self.REF_DATA,  self.JOINT_NAME, self.JOINT_COUNT, self.JOINT_DATA,  self.SPEED_NAME, self.SPEED_COUNT, self.SPEED_DATA,  self.POINT_NAME, self.POINT_COUNT, self.POINT_DATA,  self.TOOL_NAME, self.TOOL_COUNT, self.TOOL_DATA))
+        self.PROG_DTX_LIST.append(DATA_DTX % (self.REF_NAME, self.REF_COUNT, self.REF_DATA,  self.JOINT_NAME, self.JOINT_COUNT, self.JOINT_DATA,  self.SPEED_NAME, self.SPEED_COUNT, self.SPEED_DATA,  self.POINT_NAME, self.POINT_COUNT, self.POINT_DATA,  self.TOOL_NAME, self.TOOL_COUNT, self.TOOL_DATA, self.OTHER_DATA))
         self.PROG_PJX_LIST.append(PROGRAM_PJX % progname)
         self.PROG_NAME_LIST.append(progname)
         self.PROG_PGX = ''
@@ -765,6 +882,8 @@ class RobotPost(object):
         self.REF_COUNT = 0
         self.TOOL_DATA = ''
         self.TOOL_COUNT = 0
+        self.OTHER_DATA = '' # ntargets
+        self.OTHER_COUNT = 0
         self.SPEED_DATA = ''
         self.SPEED_COUNT = 0
         self.JOINT_DATA = ''

@@ -48,6 +48,38 @@ DEFAULT_HEADER_SCRIPT = """
   #   ...
   # end
   #
+  # Example to synchronize motion with another robot:
+  global sync_count = 0
+  
+  def Synchronize():
+    # Use the following digital output to signal the state of the robot:
+    DO_SYNC = 1
+    
+    # Use the following digital input to get the state of another robot:
+    DI_SYNC = 1
+    
+    if (get_standard_digital_out(DO_SYNC) == get_standard_digital_in(DI_SYNC)):
+      set_standard_digital_out(DO_SYNC, not (get_standard_digital_out(DI_SYNC)))
+      sleep(0.1)
+      thread Thread_wait_1():
+        while (True):
+          sleep(0.01)
+        end
+      end
+      if (get_standard_digital_out(DO_SYNC) != get_standard_digital_in(DI_SYNC)):
+        global thread_handler_1=run Thread_wait_1()
+        while (get_standard_digital_out(DO_SYNC) != get_standard_digital_in(DI_SYNC)):
+          sync()
+        end
+        kill thread_handler_1
+      end
+    else:
+      if (get_standard_digital_out(DO_SYNC) != get_standard_digital_in(DI_SYNC)):
+        set_standard_digital_out(DO_SYNC, not (get_standard_digital_out(DO_SYNC)))
+      end
+    end
+  end
+  
   # Example to drive a spray gun:
   def SprayOn(value):
     # use the value as an output:
@@ -58,17 +90,7 @@ DEFAULT_HEADER_SCRIPT = """
       set_standard_digital_out(DO_SPRAY, True)
     end
   end
-
-  # Example to drive an extruder:
-  def Extruder(value):
-    # use the value as an output:
-    if value < 0:
-      # stop extruder
-    else:
-      # start extruder
-    end
-  end
-  
+  #
   # Example to move an external axis
   def MoveAxis(value):
     # use the value as an output:
@@ -107,38 +129,24 @@ DEFAULT_HEADER_SCRIPT = """
 #  </children>
 #</URProgram>'''
 
-#SCRIPT_URP = '''<URProgram createdIn="3.0.0" lastSavedIn="3.0.0" name="%s" directory="/" installation="default">
-#  <children>
-#    <MainProgram runOnlyOnce="true" motionType="MoveJ" speed="1.0471975511965976" acceleration="1.3962634015954636" useActiveTCP="false">
-#      <children>
-#        <Script type="File">
-#          <cachedContents>%s
-#</cachedContents>
-#          <file resolves-to="file">%s</file>
-#        </Script>
-#      </children>
-#    </MainProgram>
-#  </children>
-#</URProgram>'''
-
-#<URProgram createdIn="3.4.3.361" lastSavedIn="3.4.3.361" name="%s" directory="." installation="default">
-SCRIPT_URP = '''<URProgram createdIn="3.0.0" lastSavedIn="3.0.0" name="%s" directory="." installation="default">
+SCRIPT_URP = '''<URProgram createdIn="3.0.0" lastSavedIn="3.0.0" name="%s" directory="/" installation="default">
   <children>
     <MainProgram runOnlyOnce="true" motionType="MoveJ" speed="1.0471975511965976" acceleration="1.3962634015954636" useActiveTCP="false">
       <children>
         <Script type="File">
           <cachedContents>%s
 </cachedContents>
-          <file>%s</file>
+          <file resolves-to="file">%s</file>
         </Script>
       </children>
     </MainProgram>
   </children>
 </URProgram>'''
 
+
 def get_safe_name(progname):
     """Get a safe program name"""
-    for c in r'-[]/\;,><&*:%=+@!#^|?^':
+    for c in r'-[]/\;,><&*:%=+@!#^()|?^':
         progname = progname.replace(c,'')
     if len(progname) <= 0:
         progname = 'Program'
@@ -196,21 +204,6 @@ ROBOT_PROGRAM_ERROR = -1
 ROBOT_NOT_CONNECTED = 0
 ROBOT_OK = 1
 
-def GetErrorMsg(rec_bytes):
-    idx_error = -1
-    try:
-        idx_error = rec_bytes.index(b'error')
-    except:
-        return None
-    
-    if idx_error >= 0:
-        idx_error_end = min(idx_error + 20, len(rec_bytes))
-        try:
-            idx_error_end = rec_bytes.index(b'\0',idx_error)
-        except:
-            return "Unknown error"
-    return rec_bytes[idx_error:idx_error_end].decode("utf-8")
-
 def UR_SendProgramRobot(robot_ip, data):
     print("POPUP: Connecting to robot...")
     sys.stdout.flush()
@@ -228,9 +221,19 @@ def UR_SendProgramRobot(robot_ip, data):
         #print("POPUP: Program running")
         #print(str(received))
         sys.stdout.flush()
-        error_msg = GetErrorMsg(received)        
-        if error_msg:            
-            print("POPUP: Robot response: <strong>" + error_msg + "</strong>")
+        idx_error = -1
+        try:
+            idx_error = received.index(b'error')
+        except:
+            pass
+        
+        if idx_error >= 0:
+            idx_error_end = min(idx_error + 20, len(received))
+            try:
+                idx_error_end = received.index(b'\0',idx_error)
+            except:
+                pass
+            print("POPUP: Robot response: <strong>" + received[idx_error:idx_error_end].decode("utf-8") + "</strong>")
             sys.stdout.flush()
             pause(5)
             return ROBOT_PROGRAM_ERROR
@@ -263,7 +266,7 @@ def UR_Wait_Ready(robot_ip, percent_cmpl):
                     if RUNTIME_MODE_LAST != RUNTIME_MODE:
                         RUNTIME_MODE_LAST = RUNTIME_MODE
                         if RUNTIME_MODE < len(RUNTIME_MODE_MSG):
-                            print("POPUP: Robot " + RUNTIME_MODE_MSG[RUNTIME_MODE] + " (transfer in progress, %.1f%% completed)" % percent_cmpl)
+                            print("POPUP: Robot " + RUNTIME_MODE_MSG[RUNTIME_MODE] + " (transfer %.1f%% completed)" % percent_cmpl)
                             sys.stdout.flush()
                         else:
                             print("POPUP: Robot Status Unknown (%.i)" % RUNTIME_MODE + " (transfer %.1f%% completed)" % percent_cmpl)
@@ -325,7 +328,7 @@ def circle_radius(p0,p1,p2):
 # Object class that handles the robot instructions/syntax
 class RobotPost(object):
     """Robot post object"""
-    MAX_LINES_X_PROG = 250    # Maximum number of lines per program. If the number of lines is exceeded, the program will be executed step by step by RoboDK
+    MAX_LINES_X_PROG = 1000    # Maximum number of lines per program. If the number of lines is exceeded, the program will be executed step by step by RoboDK
     PROG_EXT = 'script'        # set the program extension
     SPEED_MS       = 0.3    # default speed for linear moves in m/s
     SPEED_RADS     = 0.75   # default speed for joint moves in rad/s
@@ -432,33 +435,18 @@ class RobotPost(object):
         self.PROG_FILES = filesave
         
         #---------------------------- SAVE URP (GZIP compressed XML file)-------------------------
-        filesave_urp = filesave[:-7] #+'.urp'
+        filesave_urp = filesave[:-8]+'.urp'
         fid = open(filesave, "r")        
         prog_final = fid.read()
         fid.close()
-                
-        try:
-            from html import escape  # python 3.x
-        except ImportError:
-            from cgi import escape  # python 2.x
-
-        prog_final_ok = escape(prog_final)
-        self.PROG_XML = SCRIPT_URP % (self.MAIN_PROGNAME, prog_final_ok, self.MAIN_PROGNAME+'.script')
+        self.PROG_XML = SCRIPT_URP % (self.MAIN_PROGNAME, prog_final, self.MAIN_PROGNAME+'.script')
         
         # Comment next line to force transfer of the SCRIPT file
         #self.PROG_FILES = filesave_urp
         
         import gzip
-        import os
         with gzip.open(filesave_urp, 'wb') as fid_gz:
             fid_gz.write(self.PROG_XML.encode('utf-8'))
-        
-        try:
-            os.remove(filesave_urp+'.urp')
-        except OSError:
-            pass
-            
-        os.rename(filesave_urp, filesave_urp+'.urp')
             
         #print('SAVED: %s\n' % filesave_urp) # tell RoboDK the path of the saved file
         #------------------------------------------------------------------------------------------            
@@ -474,6 +462,7 @@ class RobotPost(object):
                 p = subprocess.Popen(show_result + [filesave])   
             else:
                 # open file with default application
+                import os
                 os.startfile(filesave)
             if len(self.LOG) > 0:
                 mbox('Program generation LOG:\n\n' + self.LOG)
@@ -529,19 +518,10 @@ class RobotPost(object):
             # Send script to the robot:
             #print(send_str)
             #input("POPUP: Enter to continue")
-            status = UR_SendProgramRobot(robot_ip, send_bytes)
-            while ROBOT_NOT_CONNECTED == status:
+            while ROBOT_NOT_CONNECTED == UR_SendProgramRobot(robot_ip, send_bytes):
                 print("POPUP: Connect robot to transfer program...")
                 sys.stdout.flush()
-                pause(2)           
-                status = UR_SendProgramRobot(robot_ip, send_bytes)
-            
-            if status == ROBOT_PROGRAM_ERROR:
-                print("POPUP: Program Error. Running program from the computer Aborted.")
-                sys.stdout.flush()
-                pause(2)
-                return
-                
+                pause(2)            
     
     def blend_radius_check(self, pose_abs, ratio_check=0.4):
         # check that the blend radius covers 40% of the move (at most)
@@ -590,7 +570,7 @@ class RobotPost(object):
         if self.USE_MOVEP:
             self.addline('movep(%s,accel_mss,speed_ms,%s)' % (target, blend_radius))
         else:
-            self.addline('movel(%s,accel_mss,speed_ms,0,%s)' % (target, blend_radius))
+            self.addline('movel(%s,accel_mss,speed_ms,0,%s)' % (angles_2_str(joints), blend_radius))
         
         
     def MoveC(self, pose1, joints1, pose2, joints2, conf_RLF_1=None, conf_RLF_2=None):
@@ -610,8 +590,8 @@ class RobotPost(object):
             self.MoveL(pose2, joints2, conf_RLF_2)
             return
             
-        blend_radius = self.blend_radius_check(pose1_abs, 0.2)
-        #blend_radius = '%.3f' % (0.001*radius) #'0'
+        #blend_radius = self.blend_radius_check(pose1_abs, 0.2)
+        blend_radius = '%.3f' % (0.001*radius) #'0'
         #blend_radius = '0'
         self.LAST_POS_ABS = pose2_abs.Pos()
         #self.addline('movec(%s,%s,accel_mss,speed_ms,%s)' % (angles_2_str(joints1),angles_2_str(joints2), blend_radius))
@@ -640,10 +620,10 @@ class RobotPost(object):
         
     def setSpeed(self, speed_mms):
         """Changes the robot speed (in mm/s)"""
-        #if speed_mms < 999.9:
-        #    self.USE_MOVEP = True
-        #else:
-        #    self.USE_MOVEP = False
+        if speed_mms < 999.9:
+            self.USE_MOVEP = True
+        else:
+            self.USE_MOVEP = False
         self.SPEED_MS = speed_mms/1000.0
         self.addline('speed_ms    = %.3f' % self.SPEED_MS)
         
@@ -707,13 +687,20 @@ class RobotPost(object):
             if code.lower() == "usemovel":
                 self.USE_MOVEP = False
                 return
+                
             elif code.lower() == "usemovep":
                 self.USE_MOVEP = False
+                return                
+                
+            elif code.lower().startswith("sync"):
+            # Trigger the call Synchronize, defined in the header
+                code = "Synchronize()"
+                self.addline(code)
                 return
             
             if not code.endswith(')'):
                 code = code + '()'
-            self.addline(code)
+            #self.addline(code)
         else:
             #self.addline(code)
             self.addline('# ' + code) #generate custom code as a comment
@@ -801,7 +788,7 @@ def test_post():
     robot.ProgFinish("Program")
     # robot.ProgSave(".","Program",True)
     for line in robot.PROG:
-        print(line)
+        print(line[:-1])
     if len(robot.LOG) > 0:
         mbox('Program generation LOG:\n\n' + robot.LOG)
 

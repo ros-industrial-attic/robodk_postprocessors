@@ -10,7 +10,8 @@
 # limitations under the License.
 
 # ----------------------------------------------------
-# This file is a sample POST PROCESSOR script to generate robot programs for a B&R Automation controller
+# This file is a POST PROCESSOR for Robot Offline Programming to generate programs 
+# for an Epson robot with RC controller and RoboDK
 #
 # To edit/test this POST PROCESSOR script file:
 # Select "Program"->"Add/Edit Post Processor", then select your post or create a new one.
@@ -44,63 +45,63 @@
 # Import RoboDK tools
 from robodk import *
 
-JOINT_DATA = ['Q1','Q2','Q3','Q4','Q5','Q6','Ra','Rb','Rc']
+
 
 # ----------------------------------------------------
-def pose_2_str(pose, joints = None):
+def pose_2_str(pose):
     """Prints a pose target"""
-    [x,y,z,r,p,w] = Pose_2_KUKA(pose)        
-    str_xyzwpr = 'X %.3f Y %.3f Z %.3f A %.3f B %.3f C %.3f' % (x,y,z,r,p,w)
-    if joints is not None:        
-        if len(joints) > 6:
-            for j in range(6,len(joints)):
-                str_xyzwpr += (' %s %.6f ' % (JOINT_DATA[j], joints[j]))
+    [x,y,z,a,b,c] = Pose_2_Staubli(pose)
+    return ('XY(%.3f, %.3f, %.3f, %.3f, %.3f, %.3f)' % (x,y,z,c,b,a))
     
-    return str_xyzwpr
-    
-def joints_2_str(joints):
+def angles_2_str(angles):
     """Prints a joint target"""
     str = ''
-    for i in range(len(joints)):
-        str = str + ('%s %.6f ' % (JOINT_DATA[i], joints[i]))
+    for i in range(len(angles)):
+        #data[3] = data[3] + -0.00
+        str = str + ('%.3f,' %  (angles[i]))
     str = str[:-1]
-    return str
+    return "AglToPls(" + str + ")"
 
 # ----------------------------------------------------    
 # Object class that handles the robot instructions/syntax
 class RobotPost(object):
     """Robot post object"""
-    PROG_EXT = 'cnc'        # set the program extension
+    PROG_EXT = 'gpl'        # set the program extension
     
     # other variables
-    ROBOT_POST = ''
+    # ROBOT_POST = 'unset'
     ROBOT_NAME = ''
     PROG_FILES = []
     
+    nPROGS = 0
     PROG = ''
+    TAB = ''
     LOG = ''
     nAxes = 6
-    nId = 0
-    REF_FRAME = eye(4)
+    FRAME = eye(4)
+    TOOL = eye(4)
 
     
     def __init__(self, robotpost=None, robotname=None, robot_axes = 6, **kwargs):
-        self.ROBOT_POST = robotpost
+        #self.ROBOT_POST = robotpost
         self.ROBOT_NAME = robotname
         self.PROG = ''
         self.LOG = ''
         self.nAxes = robot_axes
         
     def ProgStart(self, progname):
-        self.addline('; program: %s()' % progname)
-        self.addline('G161')
-        self.addline('G90')
-        self.addline('F15000')        
+        self.nPROGS = self.nPROGS + 1
+        if self.nPROGS == 1:
+            self.addline('Function %s' % progname)
+            self.TAB = '    '
+            self.addline('Motor On')
+            self.addline('Power High')            
         
     def ProgFinish(self, progname):
-        self.addline('; ENDPROC')
+        self.TAB = ''
+        self.addline('Fend')
         
-    def ProgSave(self, folder, progname, ask_user=False, show_result=False):
+    def ProgSave(self, folder, progname, ask_user=True, show_result=True):
         progname = progname + '.' + self.PROG_EXT
         if ask_user or not DirExists(folder):
             filesave = getSaveFile(folder, progname, 'Save program as...')
@@ -115,6 +116,7 @@ class RobotPost(object):
         fid.close()
         print('SAVED: %s\n' % filesave)
         self.PROG_FILES = filesave
+        
         #---------------------- show result
         if show_result:
             if type(show_result) is str:
@@ -128,10 +130,10 @@ class RobotPost(object):
                 # open file with default application
                 import os
                 os.startfile(filesave)  
-            
+
             if len(self.LOG) > 0:
                 mbox('Program generation LOG:\n\n' + self.LOG)
-    
+        
     def ProgSendRobot(self, robot_ip, remote_path, ftp_user, ftp_pass):
         """Send a program to the robot using the provided parameters. This method is executed right after ProgSave if we selected the option "Send Program to Robot".
         The connection parameters must be provided in the robot connection menu of RoboDK"""
@@ -139,113 +141,114 @@ class RobotPost(object):
         
     def MoveJ(self, pose, joints, conf_RLF=None):
         """Add a joint movement"""
-        self.nId = self.nId + 1
-        self.addline('N%02i G101 ' % self.nId + joints_2_str(joints))
+        #poseabs = self.FRAME * pose * invH(self.TOOL)
+        # Use of Move AglToPls(,,,) is also possible
+        self.addline('Go %s' % angles_2_str(joints))
         
     def MoveL(self, pose, joints, conf_RLF=None):
         """Add a linear movement"""
-        self.nId = self.nId + 1
-        self.addline('N%02i G1 ' % self.nId + pose_2_str(self.REF_FRAME*pose, joints))
-        #self.addline('N%02i G90 G1 ' % self.nId + joints_2_str(joints))
+        poseabs = self.FRAME * pose
+        self.addline('TGo %s' % pose_2_str(poseabs))
         
     def MoveC(self, pose1, joints1, pose2, joints2, conf_RLF_1=None, conf_RLF_2=None):
         """Add a circular movement"""
-        self.nId = self.nId + 1
-        xyz1 = (self.REF_FRAME*pose1).Pos()
-        xyz2 = (self.REF_FRAME*pose2).Pos()        
-        self.addline('N%02i G90 G102 X%.3f Y%.3f Z%.3f I1=%.3f J1=%.3f K1=%.3f' % (self.nId, xyz2[0], xyz2[1], xyz2[2], xyz1[0], xyz1[1], xyz1[2]))
-        #self.addline('N%02i G102 X%.3f Y%.3f Z%.3f I1=%.3f J1=%.3f K1=%.3f' % (self.nId, xyz1[0], xyz1[1], xyz1[2], xyz2[0]-xyz1[0], xyz2[1]-xyz1[1], xyz2[2]-xyz1[2]))		
+        poseabs1 = self.FRAME * pose1
+        poseabs2 = self.FRAME * pose2
+        self.addline('Arc %s, %s ' % (pose_2_str(poseabs1), pose_2_str(poseabs2)))        
         
-    def setFrame(self, pose, frame_id=None, frame_name=None):
+    def setFrame(self, pose, frame_id = None, frame_name = None):
         """Change the robot reference frame"""
-        self.REF_FRAME = pose
-        self.addline('; Reference frame set to: ' + pose_2_str(pose))
-        self.addline(('; N%02i G90 G92 ' % self.nId) + pose_2_str(pose))
+        self.FRAME = pose
+        self.addline("' Using reference frame %s: %s" % (frame_name, pose_2_str(pose)))
         
-    def setTool(self, pose, tool_id=None, tool_name=None):
+    def setTool(self, pose, tool_id = None, tool_name = None):
         """Change the robot TCP"""
-        self.nId = self.nId + 1
-        self.addline('; Tool frame set to: ' + pose_2_str(pose))
-        self.addline(('; N%02i G90 G92 ' % self.nId) + pose_2_str(pose))
-        pass
+        self.TOOL = pose
+        #self.addline('Tool ' + pose_2_str(pose))
+        pose_str = pose_2_str(pose)
+        self.addline("' Using Tool frame %s: %s" % (tool_name, pose_str))
+        if tool_id <= 0:
+            tool_id = 1
+        
+        self.addline('TLSet ' + str(tool_id) + ", " + pose_str)
+        self.addline('Tool ' + str(tool_id))
         
     def Pause(self, time_ms):
         """Pause the robot program"""
-        if time_ms < 0:
-            self.addline('; PAUSE')
-        else:
-            self.addline('; WAIT %.3f' % (time_ms*0.001))
+        self.addline('Wait %.3f' % (time_ms*0.001))
     
     def setSpeed(self, speed_mms):
         """Changes the robot speed (in mm/s)"""
-        self.addline('F%.3f' % (speed_mms*60))
+        self.addline('Speed %.2f' % speed_mms)
     
-    def setAcceleration(self, accel_mmss):
-        """Changes the robot acceleration (in mm/s2)"""
-        self.addlog('setAcceleration not defined')
+    def Acceleration(self, accel_ptg):
+        """Changes the robot acceleration (in %)"""
+        accel_ptg = min(accel_ptg, 100)
+        self.addline('Accel %.2f, %.2f' % (accel_ptg, accel_ptg))
     
     def setSpeedJoints(self, speed_degs):
         """Changes the robot joint speed (in deg/s)"""
-        self.addlog('setSpeedJoints not defined')
+        pass
+        #self.addlog('setSpeedJoints not defined')
     
     def setAccelerationJoints(self, accel_degss):
         """Changes the robot joint acceleration (in deg/s2)"""
-        self.addlog('setAccelerationJoints not defined')
+        pass
+        # self.addlog('setAccelerationJoints not defined')
         
     def setZoneData(self, zone_mm):
-        """Changes the rounding radius (aka CNT, APO or zone data) to make the movement smoother"""
-        self.addlog('setZoneData not defined (%.1f mm)' % zone_mm)
-
+        """Changes the zone data approach (makes the movement more smooth)"""
+        pass
+        #self.addlog('setZoneData not defined (%.1f mm)' % zone_mm)
+        
     def setDO(self, io_var, io_value):
-        """Sets a variable (digital output) to a given value"""
+        """Sets a variable (output) to a given value"""
         if type(io_var) != str:  # set default variable name if io_var is a number
-            io_var = 'OUT[%s]' % str(io_var)
-        if type(io_value) != str: # set default variable value if io_value is a number
+            io_var = '%s' % str(io_var)        
+        if type(io_value) != str: # set default variable value if io_value is a number            
             if io_value > 0:
-                io_value = 'TRUE'
+                io_value = 'On'
             else:
-                io_value = 'FALSE'
-
+                io_value = 'Off'
+        
         # at this point, io_var and io_value must be string values
-        self.addline('%s=%s' % (io_var, io_value))
-
+        self.addline('%s %s' % (io_value, io_var))
+        
     def waitDI(self, io_var, io_value, timeout_ms=-1):
-        """Waits for a variable (digital input) io_var to attain a given value io_value. Optionally, a timeout can be provided."""
+        """Waits for an input io_var to attain a given value io_value. Optionally, a timeout can be provided."""
         if type(io_var) != str:  # set default variable name if io_var is a number
-            io_var = 'IN[%s]' % str(io_var)
-        if type(io_value) != str: # set default variable value if io_value is a number
+            io_var = 'In(%s)' % str(io_var)        
+        if type(io_value) != str: # set default variable value if io_value is a number            
             if io_value > 0:
-                io_value = 'TRUE'
+                io_value = 'On'
             else:
-                io_value = 'FALSE'
-
+                io_value = 'Off'
+        
         # at this point, io_var and io_value must be string values
         if timeout_ms < 0:
-            self.addline('WAIT FOR %s==%s' % (io_var, io_value))
+            self.addline('Wait %s = %s' % (io_var, io_value))
         else:
-            self.addline('WAIT FOR %s==%s TIMEOUT=%.1f' % (io_var, io_value, timeout_ms))
+            self.addline('Wait %s = %s Timeout = %.1f' % (io_var, io_value, timeout_ms))   
         
     def RunCode(self, code, is_function_call = False):
         """Adds code or a function call"""
         if is_function_call:
             code.replace(' ','_')
-            if not code.endswith(')'):
-                code = code + '()'
-            self.addline(code)
+            self.addline("Call " + code)
         else:
-            self.addline(code)
+            self.addline("Xqt 2, " + code)
         
     def RunMessage(self, message, iscomment = False):
         """Display a message in the robot controller screen (teach pendant)"""
         if iscomment:
-            self.addline('; ' + message)
+            self.addline("' " + message)
         else:
-            self.addline('; Show message: %s' % message)
+            self.addline('Print "%s"' % message)
         
 # ------------------ private ----------------------                
     def addline(self, newline):
         """Add a program line"""
-        self.PROG = self.PROG + newline + '\n'
+        self.PROG = self.PROG + self.TAB + newline + '\n'
         
     def addlog(self, newline):
         """Add a log message"""
@@ -272,27 +275,16 @@ def test_post():
     robot = RobotPost()
 
     robot.ProgStart("Program")
-    robot.RunMessage("Program generated by RoboDK using a custom post processor", True)
-    robot.setFrame(Pose([807.766544, -963.699898, 41.478944, 0, 0, 0]))
-    robot.setTool(Pose([62.5, -108.253175, 100, -60, 90, 0]))
+   
     robot.MoveJ(Pose([200, 200, 500, 180, 0, 180]), [-46.18419, -6.77518, -20.54925, 71.38674, 49.58727, -302.54752] )
-    robot.MoveL(Pose([200, 250, 348.734575, 180, 0, -150]), [-41.62707, -8.89064, -30.01809, 60.62329, 49.66749, -258.98418] )
-    robot.MoveL(Pose([200, 200, 262.132034, 180, 0, -150]), [-43.73892, -3.91728, -35.77935, 58.57566, 54.11615, -253.81122] )
-    robot.RunMessage("Setting air valve 1 on")
-    robot.RunCode("TCP_On", True)
-    robot.Pause(1000)
-    robot.MoveL(Pose([200, 250, 348.734575, 180, 0, -150]), [-41.62707, -8.89064, -30.01809, 60.62329, 49.66749, -258.98418] )
-    robot.MoveL(Pose([250, 300, 278.023897, 180, 0, -150]), [-37.52588, -6.32628, -34.59693, 53.52525, 49.24426, -251.44677] )
-    robot.MoveL(Pose([250, 250, 191.421356, 180, 0, -150]), [-39.75778, -1.04537, -40.37883, 52.09118, 54.15317, -246.94403] )
-    robot.RunMessage("Setting air valve off")
-    robot.RunCode("TCP_Off", True)
-    robot.Pause(1000)
-    robot.MoveL(Pose([250, 300, 278.023897, 180, 0, -150]), [-37.52588, -6.32628, -34.59693, 53.52525, 49.24426, -251.44677] )
-    robot.MoveL(Pose([250, 200, 278.023897, 180, 0, -150]), [-41.85389, -1.95619, -34.89154, 57.43912, 52.34162, -253.73403] )
-    robot.MoveL(Pose([250, 150, 191.421356, 180, 0, -150]), [-43.82111, 3.29703, -40.29493, 56.02402, 56.61169, -249.23532] )
-    robot.MoveJ(None, [-46.18419, -6.77518, -20.54925, 71.38674, 49.58727, -302.54752] )
-    robot.ProgFinish("Program")
-    # robot.ProgSave(".","Program",True)
+    robot.MoveL(Pose([200, 250, 15, 180, 0, -150]), [-41.62707, -8.89064, -30.01809, 60.62329, 49.66749, -258.98418] )
+    robot.MoveC(Pose([200, 200, 34, 180, 0, -150]), [-43.73892, -3.91728, -35.77935, 58.57566, 54.11615, -253.81122],Pose([200, 200, 15, 180, 0, -150]), [-43.73892, -3.91728, -35.77935, 58.57566, 54.11615, -253.81122])
+    #robot.setFrame(Pose([192.305408, 222.255946, 0.000000, 0.000000, 0.000000, 0.000000]),5,'Frame 5')
+    robot.setSpeed(30)
+    #robot.Delay(1000)
+    
+    #robot.ProgFinish("Program")
+    #robot.ProgSave(".","Program",True)
     print(robot.PROG)
     if len(robot.LOG) > 0:
         mbox('Program generation LOG:\n\n' + robot.LOG)

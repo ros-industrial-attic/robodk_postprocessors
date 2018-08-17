@@ -37,7 +37,7 @@
 # ----------------------------------------------------
 # More information about RoboDK Post Processors and Offline Programming here:
 #     http://www.robodk.com/help#PostProcessor
-#     http://www.robodk.com/doc/PythonAPI/postprocessor.html
+#     http://www.robodk.com/doc/en/PythonAPI/postprocessor.html
 # ----------------------------------------------------
 
 
@@ -65,7 +65,7 @@ CUSTOM_FUNCTIONS = '''
 def pose_2_str(pose):
     """Prints a pose target"""
     [x,y,z,q1,q2,q3,q4] = Pose_2_ABB(pose)
-    return ('[%.3f, %.3f, %.3f],[%.6f, %.6f, %.6f, %.6f]' % (x,y,z,q1,q2,q3,q4))
+    return ('[%.3f, %.3f, %.3f],[%.8f, %.8f, %.8f, %.8f]' % (x,y,z,q1,q2,q3,q4))
     
 def angles_2_str(angles):
     """Prints a joint target"""
@@ -98,59 +98,108 @@ def extaxes_2_str(angles):
 # Object class that handles the robot instructions/syntax
 class RobotPost(object):
     """Robot post object"""
+    MAX_LINES_X_PROG = 5000  # maximum number of lines per program. It will then generate multiple "pages (files)"
+    INCLUDE_SUB_PROGRAMS = True
     PROG_EXT = 'mod'        # set the program extension
     
     # other variables
-    ROBOT_POST = 'unset'
-    ROBOT_NAME = 'generic'
-    PROG_FILES = []
+    ROBOT_POST = 'ABB IRC5 including arc welding and 3D printing options'
+    ROBOT_NAME = 'unknown'
+    PROG_NAMES = []
+    PROG_FILES = []    
+    PROG_LIST = []
+    PROG_CALLS = []
+    PROG_CALLS_LIST = []   
+    nLines = 0
+    nProgs = 0
     
-    nPROGS = 0
-    PROG = ''
+    PROG = []
     TAB = ''
     LOG = ''
-    ZONEDATA = 'z0'
-    SPEEDDATA = 'v50'
+    SPEEDDATA = 'rdkSpeed'
+    ZONEDATA = 'z1'
+    TOOLDATA = 'rdkTool'
+    WOBJDATA = 'rdkWObj'
+    nAxes = 6
+    
+    CLAD_ON = False
+    CLAD_DATA = 'clad1'
+    
+    ARC_ON = False
+    ARC_WELDDATA = 'weld1'
+    ARC_WEAVEDATA = 'weave1'
+    ARC_SEAMDATA = 'seam1'
+
+    NEW_E_LENGTH = None
+    
     
     def __init__(self, robotpost=None, robotname=None, robot_axes = 6, **kwargs):
         self.ROBOT_POST = robotpost
         self.ROBOT_NAME = robotname
-        self.PROG = ''
+        self.PROG = []
         self.LOG = ''
+        self.nAxes = robot_axes
+        for k,v in kwargs.items():
+            if k == 'lines_x_prog':
+                self.MAX_LINES_X_PROG = v      
         
-    def ProgStart(self, progname):
-        self.nPROGS = self.nPROGS + 1
-        if self.nPROGS == 1:
+    def ProgStart(self, progname, new_page = False):
+        progname_i = progname
+        nPages = len(self.PROG_LIST)
+        if new_page:            
+            if nPages == 0:
+                progname_i = progname
+            else:
+                progname_i = "%s%i" % (self.PROG_NAME, nPages)
+                
+        else:
+            self.nProgs = self.nProgs + 1
+            if self.nProgs == 1:# and not self.INCLUDE_SUB_PROGRAMS:
+                self.PROG_NAME = progname
+                #self.nProgs = self.nProgs + 1
+            
+        if new_page or not self.INCLUDE_SUB_PROGRAMS or self.nProgs == 1:
+            # new file!
+            self.PROG_NAMES.append(progname_i)
+            self.TAB = ''
             self.addline('%%%')
             self.addline('  VERSION:1')
             self.addline('  LANGUAGE:ENGLISH')
             self.addline('%%%')
             self.addline('')
-            self.addline('MODULE MOD_%s' % progname)
+            self.addline('MODULE MOD_%s' % progname_i)
+            self.TAB = ONETAB
+            
+        if self.nProgs == 1 and nPages == 0:
             self.TAB = ONETAB
             self.addline('')
-            self.addline('LOCAL PERS tooldata rdkTool := [TRUE,[[0,0,0],[1,0,0,0]],[2,[0,0,15],[1,0,0,0],0,0,0.005]];')
-            self.addline('LOCAL PERS wobjdata rdkWObj := [FALSE, TRUE, "", [[0,0,0],[1,0,0,0]],[[0,0,0],[1,0,0,0]]];')
+            self.addline('LOCAL PERS tooldata %s := [TRUE,[[0,0,0],[1,0,0,0]],[2,[0,0,15],[1,0,0,0],0,0,0.005]];' % self.TOOLDATA)
+            self.addline('LOCAL PERS wobjdata %s := [FALSE, TRUE, "", [[0,0,0],[1,0,0,0]],[[0,0,0],[1,0,0,0]]];' % self.WOBJDATA)
+            self.addline('VAR speeddata %s := [250,500,5000,1000]; ! set default speed' % self.SPEEDDATA)            
             self.addcode(CUSTOM_HEADER)
             self.addcode(CUSTOM_FUNCTIONS)
-        self.addline('')
+        
         self.TAB = ONETAB
-        self.addline('PROC %s()' % progname)
+        self.addline('')
+        self.addline('PROC %s()' % progname_i)
         self.TAB = ONETAB + ONETAB # instructions need two tabs
         self.addline('ConfJ \On;')
         self.addline('ConfL \Off;')
         
-    def ProgFinish(self, progname):
-        if self.nPROGS == 1:
-            self.addline('Stop;')
-            
+    def ProgFinish(self, progname, new_page = False):
         self.TAB = ONETAB
-        self.addline('ENDPROC')
-        
-    def ProgSave(self, folder, progname, ask_user = False, show_result = False):
-        self.addline('')
-        self.TAB = ''
-        self.addline('ENDMODULE')
+        self.PROG += [ONETAB + 'ENDPROC\n']
+        if new_page or not self.INCLUDE_SUB_PROGRAMS:# or self.nProgs == 1:
+            self.PROG += ['ENDMODULE']
+            self.PROG_LIST.append(self.PROG)
+            self.PROG_CALLS_LIST.append(self.PROG_CALLS)
+            self.PROG = []
+            self.PROG_CALLS = []
+            self.nLines = 0
+        #elif self.nProgs <= 1 or self.INCLUDE_SUB_PROGRAMS:
+        #    self.PROG += ['ENDMODULE']
+
+    def progsave(self, folder, progname, ask_user = False, show_result = False): 
         progname = progname + '.' + self.PROG_EXT
         if ask_user or not DirExists(folder):
             filesave = getSaveFile(folder, progname, 'Save program as...')
@@ -160,11 +209,15 @@ class RobotPost(object):
                 return
         else:
             filesave = folder + '/' + progname
+            
         fid = open(filesave, "w")
-        fid.write(self.PROG)
-        fid.close()  
+        for line in self.PROG:
+            fid.write(line)
+            fid.write('\n') # print new line
+            
+        fid.close()
         print('SAVED: %s\n' % filesave) # tell RoboDK the path of the saved file
-        self.PROG_FILES = filesave
+        self.PROG_FILES.append(filesave)
         
         # open file with default application
         if show_result:
@@ -172,108 +225,59 @@ class RobotPost(object):
                 # Open file with provided application
                 import subprocess
                 p = subprocess.Popen([show_result, filesave])
+            elif type(show_result) is list:
+                import subprocess
+                p = subprocess.Popen(show_result + [filesave])   
             else:
                 # open file with default application
                 import os
+                
                 os.startfile(filesave)
             if len(self.LOG) > 0:
                 mbox('Program generation LOG:\n\n' + self.LOG)
-        #self.UploadFileFTP(filesave)
-    
-    def RemoveFileFTP(self, ftp, filepath):
-        import ftplib
-        """Recursively delete a directory tree on a remote server."""
-        try:
-            ftp.delete(filepath)
-        except ftplib.all_errors as e:
-            import sys
-            print('POPUP: Could not remove {0}: {1}'.format(filepath, e))
-            sys.stdout.flush()
-    
-    def UploadFileFTP(self, file_path_name):
-        filepath = getFileDir(file_path_name)
-        filename = getBaseName(file_path_name)
-        import ftplib
-        import os
-        robot = None
-        try:
-            RDK = Robolink()
-            robot = RDK.Item(self.ROBOT_NAME, ITEM_TYPE_ROBOT)
-            [server_ip, port, remote_path, username, password] = robot.ConnectionParams()
-        except:
-            server_ip = '192.168.125.1'  # enter URL address of the robot it may look like: '192.168.1.123'
-            username = 'anonymous'     # enter FTP user name
-            password = ''     # enter FTP password
-            remote_path = '/hd0a/serialnum/project/HOME/' # enter the remote path
-        import sys
-        while True:
-            print("POPUP: Uploading program through FTP. Enter server parameters...")
-            sys.stdout.flush()
-            
-            # check if connection parameters are OK
-            values_ok = mbox('Using the following FTP connection parameters to transfer the program:\nRobot IP: %s\nRemote path: %s\nFTP username: %s\nFTP password: ****\n\nContinue?' % (server_ip, remote_path, username))
-            if values_ok:
-                print("Using default connection parameters")
-            else:
-                server_ip = mbox('Enter robot IP', entry=server_ip)
-                if not server_ip:
-                    print('FTP upload cancelled by user')
-                    return
-                remote_path = mbox('Enter the remote path (program folder) on the Staubli robot controller', entry=remote_path)
-                if not remote_path:
-                    return
-                if remote_path.endswith('/'):
-                    remote_path = remote_path[:-1]
-                rob_user_pass = mbox('Enter user name and password as\nuser-password', entry=('%s-%s' % (username, password)))
-                if not rob_user_pass:
-                    return    
-                name_value = rob_user_pass.split('-')
-                if len(name_value) < 2:
-                    password = ''
-                else:
-                    password = name_value[1]
-                username = name_value[0]
-            print("POPUP: <p>Connecting to <strong>%s</strong> using user name <strong>%s</strong> and password ****</p><p>Please wait...</p>" % (server_ip, username))
-            #print("POPUP: Trying to connect. Please wait...")
-            sys.stdout.flush()
-            if robot is not None:
-                robot.setConnectionParams(server_ip, port, remote_path, username, password)
-            pause(2)
-            try:
-                myFTP = ftplib.FTP(server_ip, username, password)
-                break;
-            except:
-                error_str = sys.exc_info()[1]
-                print("POPUP: Connection to %s failed: <p>%s</p>" % (server_ip,error_str))
-                sys.stdout.flush()
-                contin = mbox("Connection to %s failed. Reason:\n%s\n\nRetry?" % (server_ip,error_str))
-                if not contin:
-                    return
 
-        remote_path_prog = remote_path + '/' + filename
-        print("POPUP: Connected. Deleting remote file %s..." % remote_path_prog)
-        sys.stdout.flush()
-        self.RemoveFileFTP(myFTP, remote_path_prog)
-        print("POPUP: Connected. Uploading program to %s..." % server_ip)
-        sys.stdout.flush()
-        try:
-            myFTP.cwd(remote_path)
-        except:
-            error_str = sys.exc_info()[1]
-            print("POPUP: Remote path not found or can't be created: %s" % (remote_path))
-            sys.stdout.flush()
-            contin = mbox("Remote path\n%s\nnot found or can't create folder.\n\nChange path and permissions and retry." % remote_path)
-            return
+    def ProgSave(self, folder, progname, ask_user = False, show_result = False):
+        if len(self.PROG_LIST) >= 1:
+            if self.nLines > 0:
+                self.PROG += ['ENDMODULE']
+                self.PROG_LIST.append(self.PROG)
+                self.PROG_CALLS_LIST.append(self.PROG_CALLS)
+                self.PROG = []
+                self.PROG_CALLS = []
+                self.nLines = 0
+                
+            npages = len(self.PROG_LIST)
+            progname_main = progname + "Main"
+            mainprog = []
+            mainprog += ["MODULE MOD_%s\n" % progname_main]
+            mainprog += [ONETAB+"!PROC Main()"]
+            mainprog += [ONETAB+"PROC %s()" % progname_main]            
+            mainprog += [ONETAB+ONETAB+"! This main program needs to be executed to run: %s\n" % progname]
+            for i in range(npages):
+                mainprog += [ONETAB+ONETAB+"%s()" % self.PROG_NAMES[i]]
+            mainprog += ["\n"+ONETAB+"ENDPROC\n"]
+            mainprog += ["ENDMODULE"]
             
-        def uploadThis(localfile, filename):
-            print('  Sending file: %s' % localfile)
-            print("POPUP: Sending file: %s" % filename)
-            sys.stdout.flush()
-            fh = open(localfile, 'rb')
-            myFTP.storbinary('STOR %s' % filename, fh)
-            fh.close()
-
-        uploadThis(file_path_name, filename)
+            self.PROG = mainprog
+            self.progsave(folder, progname_main, ask_user, show_result)
+            self.LOG = ''
+            if len(self.PROG_FILES) == 0:
+                # cancelled by user
+                return
+                
+            first_file = self.PROG_FILES[0]
+            folder_user = getFileDir(first_file)
+            # progname_user = getFileName(self.FILE_SAVED)
+            
+            for i in range(npages):
+                self.PROG = self.PROG_LIST[i]
+                self.PROG_CALLS = self.PROG_CALLS_LIST[i]
+                self.progsave(folder_user, self.PROG_NAMES[i], False, show_result)
+                
+        else:
+            self.PROG += ['ENDMODULE'] # Very important!
+            self.progsave(folder, progname, ask_user, show_result)
+        
          
     def ProgSendRobot(self, robot_ip, remote_path, ftp_user, ftp_pass):
         """Send a program to the robot using the provided parameters. This method is executed right after ProgSave if we selected the option "Send Program to Robot".
@@ -282,73 +286,109 @@ class RobotPost(object):
         
     def MoveJ(self, pose, joints, conf_RLF=None):
         """Add a joint movement"""
-        self.addline('MoveAbsJ [%s,%s],%s,%s,rdkTool,\WObj:=rdkWObj;' % (angles_2_str(joints), extaxes_2_str(joints), self.SPEEDDATA, self.ZONEDATA))
+        self.addline('MoveAbsJ [%s,%s],%s,%s,%s,\WObj:=%s;' % (angles_2_str(joints), extaxes_2_str(joints), self.SPEEDDATA, self.ZONEDATA, self.TOOLDATA, self.WOBJDATA))
         
     def MoveL(self, pose, joints, conf_RLF=None):
         """Add a linear movement"""
+        
+        # Control turning arc movement off
+        if self.ARC_ON and self.NEW_E_LENGTH is None:
+            self.ARC_ON = False
+            self.addline('ArcLEnd;')
+        
+        target = ''
         if pose is None:
-            self.addline('MoveL CalcRobT([%s,%s], rdkTool \WObj:=rdkWObj),%s,%s,rdkTool,\WObj:=rdkWObj;' % (angles_2_str(joints), extaxes_2_str(joints), self.SPEEDDATA, self.ZONEDATA))
-            
+            target = 'CalcRobT([%s,%s],%s,\WObj:=%s)' % (angles_2_str(joints), extaxes_2_str(joints), self.TOOLDATA, self.WOBJDATA)
         else:
             if conf_RLF is None:
                 conf_RLF = [0,0,0]
             cf1 = 0
             cf4 = 0
             cf6 = 0            
-            if joints is not None:
+            if joints is not None and len(joints) >= 6:
                 cf1 = math.floor(joints[0]/90.0)
                 cf4 = math.floor(joints[3]/90.0)
                 cf6 = math.floor(joints[5]/90.0)
             [REAR, LOWERARM, FLIP] = conf_RLF
             cfx = 4*REAR + 2*LOWERARM + FLIP
-            self.addline('MoveL [%s,[%i,%i,%i,%i],%s],%s,%s,rdkTool,\WObj:=rdkWObj;' % (pose_2_str(pose), cf1, cf4, cf6,cfx, extaxes_2_str(joints), self.SPEEDDATA, self.ZONEDATA))
+            target = '[%s,[%i,%i,%i,%i],%s]' % (pose_2_str(pose), cf1, cf4, cf6,cfx, extaxes_2_str(joints))
+
+        if self.ARC_ON:
+            # ArcL p100, v100, seam1, weld5 \Weave:=weave1, z10, gun1;
+            self.addline('ArcL %s,%s,%s,%s,\Weave:=%s,%s,%s,\WObj:=%s;' % (target, self.SPEEDDATA, self.ARC_SEAMDATA, self.ARC_WELDDATA, self.ARC_WEAVEDATA, self.ZONEDATA, self.TOOLDATA, self.WOBJDATA))
+        elif self.CLAD_ON:
+            self.addline('CladL %s,%s,%s,%s,%s,\WObj:=%s;' % (target, self.SPEEDDATA, self.CLAD_DATA, self.ZONEDATA, self.TOOLDATA, self.WOBJDATA))
+        else:
+            self.addline('MoveL %s,%s,%s,%s,\WObj:=%s;' % (target, self.SPEEDDATA, self.ZONEDATA, self.TOOLDATA, self.WOBJDATA))
+
+        # Modification for Paul
+        self.NEW_E_LENGTH = None 
             
     def MoveC(self, pose1, joints1, pose2, joints2, conf_RLF_1=None, conf_RLF_2=None):
         """Add a circular movement"""
-        if conf_RLF_1 is None:
-            conf_RLF_1 = [0,0,0]
-        if conf_RLF_2 is None:
-            conf_RLF_2 = [0,0,0]
+        target1 = ''
+        target2 = ''
+        if pose1 is None:
+            target1 = 'CalcRobT([%s,%s], %s \WObj:=%s)' % (angles_2_str(joints1), extaxes_2_str(joints1), self.TOOLDATA, self.WOBJDATA)
+        else:
+            if conf_RLF_1 is None:
+                conf_RLF_1 = [0,0,0]                
+            cf1_1 = 0
+            cf4_1 = 0
+            cf6_1 = 0   
+            if joints1 is not None and len(joints1) >= 6:
+                cf1_1 = math.floor(joints1[0]/90.0)
+                cf4_1 = math.floor(joints1[3]/90.0)
+                cf6_1 = math.floor(joints1[5]/90.0)
+            [REAR, LOWERARM, FLIP] = conf_RLF_1
+            cfx_1 = 4*REAR + 2*LOWERARM + FLIP
+            target1 = '[%s,[%i,%i,%i,%i],%s]' % (pose_2_str(pose1), cf1_1, cf4_1, cf6_1,cfx_1, extaxes_2_str(joints1))
             
-        cf1_1 = 0
-        cf4_1 = 0
-        cf6_1 = 0   
-        if joints1 is not None:
-            cf1_1 = math.floor(joints1[0]/90.0)
-            cf4_1 = math.floor(joints1[3]/90.0)
-            cf6_1 = math.floor(joints1[5]/90.0)
-        [REAR, LOWERARM, FLIP] = conf_RLF_1
-        cfx_1 = 4*REAR + 2*LOWERARM + FLIP
-        
-        cf1_2 = 0
-        cf4_2 = 0
-        cf6_2 = 0  
-        if joints2 is not None:
-            cf1_2 = math.floor(joints2[0]/90.0)
-            cf4_2 = math.floor(joints2[3]/90.0)
-            cf6_2 = math.floor(joints2[5]/90.0)
-        [REAR, LOWERARM, FLIP] = conf_RLF_2
-        cfx_2 = 4*REAR + 2*LOWERARM + FLIP
-        self.addline('MoveC [%s,[%i,%i,%i,%i],%s],[%s,[%i,%i,%i,%i],%s],%s,%s,rdkTool,\WObj:=rdkWObj;' % (pose_2_str(pose1), cf1_1, cf4_1, cf6_1,cfx_1, extaxes_2_str(joints1), pose_2_str(pose2), cf1_2, cf4_2, cf6_2,cfx_2, extaxes_2_str(joints2), self.SPEEDDATA, self.ZONEDATA))
+        if pose2 is None:
+            target2 = 'CalcRobT([%s,%s],%s,\WObj:=%s)' % (angles_2_str(joints2), extaxes_2_str(joints2), self.TOOLDATA, self.WOBJDATA)
+        else:
+            if conf_RLF_2 is None:
+                conf_RLF_2 = [0,0,0]
+            cf1_2 = 0
+            cf4_2 = 0
+            cf6_2 = 0  
+            if joints2 is not None and len(joints2) >= 6:
+                cf1_2 = math.floor(joints2[0]/90.0)
+                cf4_2 = math.floor(joints2[3]/90.0)
+                cf6_2 = math.floor(joints2[5]/90.0)
+            [REAR, LOWERARM, FLIP] = conf_RLF_2
+            cfx_2 = 4*REAR + 2*LOWERARM + FLIP
+            target2 = '[%s,[%i,%i,%i,%i],%s]' % (pose_2_str(pose2), cf1_2, cf4_2, cf6_2,cfx_2, extaxes_2_str(joints2))
+           
+        if self.ARC_ON:
+            # ArcL p100, v100, seam1, weld5 \Weave:=weave1, z10, gun1;
+            self.addline('ArcC %s,%s,%s,%s,%s,\Weave:=%s,%s,%s,\WObj:=%s;' % (target1, target2, self.SPEEDDATA, self.ARC_SEAMDATA, self.ARC_WELDDATA, self.ARC_WEAVEDATA, self.ZONEDATA, self.TOOLDATA, self.WOBJDATA))
+        elif self.CLAD_ON:
+            self.addline('CladC %s,%s,%s,%s,%s,%s,\WObj:=%s;' % (target1, target2, self.SPEEDDATA, self.CLAD_DATA, self.ZONEDATA, self.TOOLDATA, self.WOBJDATA))
+        else:
+            self.addline('MoveC %s,%s,%s,%s,%s,\WObj:=%s;' % (target1, target2, self.SPEEDDATA, self.ZONEDATA, self.TOOLDATA, self.WOBJDATA))
                 
     def setFrame(self, pose, frame_id=None, frame_name=None):
         """Change the robot reference frame"""
-        self.addline('rdkWObj := [FALSE, TRUE, "", [%s],[[0,0,0],[1,0,0,0]]];' % pose_2_str(pose))
+        #self.addline('%s := [FALSE, TRUE, "", [%s],[[0,0,0],[1,0,0,0]]];' % (self.WOBJDATA, pose_2_str(pose)))
+        self.addline('%s.uframe := [%s];' % (self.WOBJDATA, pose_2_str(pose)))
         
     def setTool(self, pose, tool_id=None, tool_name=None):
         """Change the robot TCP"""
-        self.addline('rdkTool := [TRUE,[%s],[20,[0,0,200],[1,0,0,0],0,0,0.005]];' % pose_2_str(pose))
+        #self.addline('%s := [TRUE,[%s],[2,[0,0,15],[1,0,0,0],0,0,0.005]];' % (self.TOOLDATA, pose_2_str(pose)))
+        self.addline('%s.tframe := [%s];' % (self.TOOLDATA, pose_2_str(pose)))
         
     def Pause(self, time_ms):
         """Pause the robot program"""
         if time_ms <= 0:
             self.addline('STOP;')
         else:
-            self.addline('WaitTime %.3f' % (time_ms*0.001))
+            self.addline('WaitTime %.3f;' % (time_ms*0.001))
         
     def setSpeed(self, speed_mms):
         """Changes the robot speed (in mm/s)"""
-        self.SPEEDDATA = 'v%i' % speed_mms
+        #self.SPEEDDATA = 'v%i' % speed_mms
+        self.addline('%s := [%.2f,500,5000,1000];' % (self.SPEEDDATA, speed_mms))
     
     def setAcceleration(self, accel_mmss):
         """Changes the robot acceleration (in mm/s2)"""
@@ -402,6 +442,28 @@ class RobotPost(object):
         """Adds code or a function call"""
         if is_function_call:
             code = code.replace(' ','_')
+            if code.startswith('ArcLStart'):
+                self.ARC_ON = True
+            elif code.startswith('ArcLEnd'):
+                self.ARC_ON = False
+            elif code.startswith('CladLStart'):
+                self.CLAD_ON = True
+            elif code.startswith('CladLEnd'):
+                self.CLAD_ON = False
+            elif code.startswith("Extruder("):
+                self.addline(code + ';')
+                return
+            
+                # if the program call is Extruder(123.56), we extract the number as a string and convert it to a number
+                self.NEW_E_LENGTH = float(code[9:-1]) # it needs to retrieve the extruder length from the program call
+                # Parse the Extruder into ArcLStart
+                if not self.ARC_ON:
+                    # Generate ArcLStart if we are not welding yet
+                    self.ARC_ON = True
+                    self.addline('ArcLStart;')
+                # Do not generate the program call
+                return                
+                
             self.addline(code + ';')
         else:
             if code.startswith('END') or code.startswith('ELSEIF'):
@@ -425,15 +487,27 @@ class RobotPost(object):
 # ------------------ private ----------------------                
     def addline(self, newline):
         """Add a program line"""
-        self.PROG = self.PROG + self.TAB + newline + '\n'
+        if self.nProgs > 1 and not self.INCLUDE_SUB_PROGRAMS:
+            return
+        
+        if self.nLines > self.MAX_LINES_X_PROG:
+            self.nLines = 0
+            self.ProgFinish(self.PROG_NAME, True)
+            self.ProgStart(self.PROG_NAME, True)
+            
+        self.PROG += [self.TAB + newline]
+        self.nLines = self.nLines + 1
         
     def addlog(self, newline):
         """Add a log message"""
+        if self.nProgs > 1 and not self.INCLUDE_SUB_PROGRAMS:
+            return
         self.LOG = self.LOG + newline + '\n'
 
     def addcode(self, code):
         """Adds custom code, such as a custom header"""
-        self.PROG = self.PROG + code
+        self.PROG += [code]
+        
 
 # -------------------------------------------------
 # ------------ For testing purposes ---------------   
@@ -453,33 +527,37 @@ def Pose(xyzrpw):
 def test_post():
     """Test the post with a basic program"""
 
-    robot = RobotPost('ABB RAPID custom', 'Generic ABB robot')
+    robot = RobotPost(r'ABB_RAPID_IRC5', r'ABB IRB 6700-155/2.85', 6, axes_type=['R','R','R','R','R','R'])
 
-    robot.ProgStart("Program")
-    robot.RunMessage("Program generated by RoboDK", True)
-    robot.setFrame(Pose([807.766544, -963.699898, 41.478944, 0, 0, 0]))
-    robot.setTool(Pose([62.5, -108.253175, 100, -60, 90, 0]))
-    robot.MoveJ(Pose([200, 200, 500, 180, 0, 180]), [-46.18419, -6.77518, -20.54925, 71.38674, 49.58727, -302.54752] )
-    robot.MoveL(Pose([200, 250, 348.734575, 180, 0, -150]), [-41.62707, -8.89064, -30.01809, 60.62329, 49.66749, -258.98418] )
-    robot.MoveL(Pose([200, 200, 262.132034, 180, 0, -150]), [-43.73892, -3.91728, -35.77935, 58.57566, 54.11615, -253.81122] )
-    robot.RunMessage("Setting air valve 1 on")
-    robot.RunCode("TCP_On", True)
-    robot.Pause(1000)
-    robot.MoveL(Pose([200, 250, 348.734575, 180, 0, -150]), [-41.62707, -8.89064, -30.01809, 60.62329, 49.66749, -258.98418] )
-    robot.MoveL(Pose([250, 300, 278.023897, 180, 0, -150]), [-37.52588, -6.32628, -34.59693, 53.52525, 49.24426, -251.44677] )
-    robot.MoveL(Pose([250, 250, 191.421356, 180, 0, -150]), [-39.75778, -1.04537, -40.37883, 52.09118, 54.15317, -246.94403] )
-    robot.RunMessage("Setting air valve off")
-    robot.RunCode("TCP_Off", True)
-    robot.Pause(1000)
-    robot.MoveL(Pose([250, 300, 278.023897, 180, 0, -150]), [-37.52588, -6.32628, -34.59693, 53.52525, 49.24426, -251.44677] )
-    robot.MoveL(Pose([250, 200, 278.023897, 180, 0, -150]), [-41.85389, -1.95619, -34.89154, 57.43912, 52.34162, -253.73403] )
-    robot.MoveL(Pose([250, 150, 191.421356, 180, 0, -150]), [-43.82111, 3.29703, -40.29493, 56.02402, 56.61169, -249.23532] )
-    robot.ProgFinish("Program")
-    # robot.ProgSave(".","Program",True)
-    print(robot.PROG)
+    robot.ProgStart(r'Prog1')
+    robot.RunMessage(r'Program generated by RoboDK 3.1.5 for ABB IRB 6700-155/2.85 on 18/05/2017 11:02:41', True)
+    robot.RunMessage(r'Using nominal kinematics.', True)
+    robot.setFrame(Pose([0.000000, 0.000000, 0.000000, 0.000000, 0.000000, 0.000000]),-1,r'ABB IRB 6700-155/2.85 Base')
+    robot.setTool(Pose([380.000000, 0.000000, 200.000000, 0.000000, 90.000000, 0.000000]),1,r'Tool 1')
+    robot.setSpeed(2000.000)
+    robot.MoveJ(Pose([2103.102861, 0.000000, 1955.294643, -180.000000, -3.591795, -180.000000]), [0.00000, 3.93969, -14.73451, 0.00000, 14.38662, -0.00000], [0.0, 0.0, 0.0])
+    robot.MoveJ(Pose([2065.661612, 700.455189, 1358.819971, 180.000000, -3.591795, -180.000000]), [22.50953, 5.58534, 8.15717, 67.51143, -24.42689, -64.06258], [0.0, 0.0, 1.0])
+    robot.Pause(500.0)
+    robot.setSpeed(100.000)
+    robot.RunCode(r'ArcLStart', True)
+    robot.MoveL(Pose([2065.661612, 1074.197508, 1358.819971, 149.453057, -3.094347, -178.175378]), [36.19352, 22.86988, -12.37860, 88.83085, -66.57439, -81.72795], [0.0, 0.0, 1.0])
+    robot.MoveC(Pose([2468.239418, 1130.614560, 1333.549802, -180.000000, -3.591795, -180.000000]), [28.37934, 35.45210, -28.96667, 85.54799, -28.41204, -83.00289], Pose([2457.128674, 797.241647, 1156.545094, 180.000000, -37.427062, -180.000000]), [18.58928, 43.77805, -40.05410, 155.58093, -37.76022, -148.70252], [0.0, 0.0, 1.0], [0.0, 0.0, 1.0])
+    robot.MoveL(Pose([2457.128674, 797.241647, 1156.545094, 180.000000, -37.427062, -180.000000]), [18.58928, 43.77805, -40.05410, 155.58093, -37.76022, -148.70252], [0.0, 0.0, 1.0])
+    robot.MoveL(Pose([2469.684137, 397.051453, 1356.565545, -180.000000, -3.591795, -180.000000]), [10.73523, 21.17902, -10.22963, 56.13802, -12.93695, -54.77268], [0.0, 0.0, 1.0])
+    robot.MoveL(Pose([2494.452316, 404.343933, 1751.146172, -180.000000, -3.591795, -180.000000]), [10.80299, 25.05092, -31.54821, 132.79244, -14.76878, -133.06820], [0.0, 0.0, 1.0])
+    robot.MoveL(Pose([2494.452316, 834.649436, 1751.146172, -180.000000, -3.591795, -180.000000]), [21.49850, 33.45974, -43.37980, 121.21995, -25.32130, -122.42907], [0.0, 0.0, 1.0])
+    robot.setZoneData(5.000)
+    robot.MoveL(Pose([2147.781731, 834.649436, 1772.906995, -180.000000, -3.591795, -180.000000]), [25.21677, 13.65153, -17.95808, 107.03387, -26.40518, -107.19412], [0.0, 0.0, 1.0])
+    robot.MoveL(Pose([2147.781731, 375.769504, 1772.906995, -180.000000, -3.591795, -180.000000]), [11.97030, 5.74930, -8.96838, 119.55454, -13.76610, -119.51539], [0.0, 0.0, 1.0])
+    robot.MoveL(Pose([2147.781731, 61.363728, 1772.906995, -180.000000, -3.591795, -180.000000]), [1.98292, 3.75693, -6.84136, -16.54793, 6.96416, 16.55673], [0.0, 0.0, 0.0])
+    robot.RunCode(r'ArcLEnd', True)
+    robot.MoveL(Pose([2147.781731, 275.581430, 1772.906995, -180.000000, -3.591795, -180.000000]), [8.83799, 4.80606, -7.95436, 127.27676, -11.11070, -127.24243], [0.0, 0.0, 1.0])
+    robot.ProgFinish(r'Prog1')
+    for line in robot.PROG:
+        print(line)
+    #print(robot.PROG)
     if len(robot.LOG) > 0:
         mbox('Program generation LOG:\n\n' + robot.LOG)
-
     input("Press Enter to close...")
 
 if __name__ == "__main__":

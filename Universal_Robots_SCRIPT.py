@@ -40,119 +40,31 @@
 #     http://www.robodk.com/doc/en/PythonAPI/postprocessor.html
 # ----------------------------------------------------
 
-HEADER_PROG = '''#--------------- ROBOTIQ GRIPPER UTILITY
-  def RQ_2FG_Close():
-    global Position_close=255
-    global Speed_close=255
-    global Force_close=255
-    #Allocation of modbus output registers with the desired settings
-    out_reg2_close = Speed_close * 256 + Force_close
-    modbus_set_output_register("Speed_Force_Req", out_reg2_close, False)
-    modbus_set_output_register("Position_Req", Position_close, False)
-    
-    #Allow movement
-    modbus_set_output_signal("Go_to_Requested", True, False)
-    while(modbus_get_signal_status("Action_Status", False) == False):
-      sync()
-    end
-    
-    #Wait until the end of the movement
-    sleep(0.2)
-    while (not((modbus_get_signal_status("Obj_Det_Status1", False) == True) or (modbus_get_signal_status("Obj_Det_Status2", False) == True ))):
-      sleep(0.1)
-      sync()
-    end
-    
-    sleep(0.2)
-    #Status check object detection
-    global obj_detect1 = modbus_get_signal_status("Obj_Det_Status1",False)
-    global obj_detect2 = modbus_get_signal_status("Obj_Det_Status2",False)
-    if ((obj_detect1 == False) and (obj_detect2 == True)):
-      global Contact_opening = False
-      global Contact_closing = True
-    else:
-      if ((obj_detect1 == True) and (obj_detect2 == False)):
-        global Contact_opening = True
-        global Contact_closing = False
-      else:
-        global Contact_opening = False
-        global Contact_closing = False
-      end
-    end
-    
-    #Prohibit the movement
-    modbus_set_output_signal("Go_to_Requested", False, False)
-    while(modbus_get_signal_status("Action_Status", False) == True):
-      sync()
-    end
-  end
-  def RQ_2FG_Open():
-    global Position_open=0
-    global Speed_open=255
-    global Force_open=255
-    #Allocation of modbus output registers with the desired settings
-    out_reg2_open = Speed_open * 256 + Force_open
-    modbus_set_output_register("Speed_Force_Req", out_reg2_open, False)
-    modbus_set_output_register("Position_Req", Position_open, False)
-    
-    #Allow movement
-    modbus_set_output_signal("Go_to_Requested", True, False)
-    while(modbus_get_signal_status("Action_Status", False) == False):
-      sync()
-    end
-    
-    #Wait until the end of the movement
-    sleep(0.2)
-    while (not((modbus_get_signal_status("Obj_Det_Status1", False) == True) or (modbus_get_signal_status("Obj_Det_Status2", False) == True ))):
-      sleep(0.1)
-      sync()
-    end
-    
-    sleep(0.2)
-    #Status check object detection
-    global obj_detect1 = modbus_get_signal_status("Obj_Det_Status1",False)
-    global obj_detect2 = modbus_get_signal_status("Obj_Det_Status2",False)
-    if ((obj_detect1 == False) and (obj_detect2 == True)):
-      global Contact_opening = False
-      global Contact_closing = True
-    else:
-      if ((obj_detect1 == True) and (obj_detect2 == False)):
-        global Contact_opening = True
-        global Contact_closing = False
-      else:
-        global Contact_opening = False
-        global Contact_closing = False
-      end
-    end
-    
-    #Prohibit the movement
-    modbus_set_output_signal("Go_to_Requested", False, False)
-    while(modbus_get_signal_status("Action_Status", False) == True):
-      sync()
-    end
-  end
-  
-  #Activation if not activated
-  if ((modbus_get_signal_status("Gripper_Status1", False) == False)  and (modbus_get_signal_status("Gripper_Status2", False) == False)):
-    modbus_set_output_signal("Activate", True, False)
-  end
-  
-  #Prohibit the movement
-  modbus_set_output_signal("Go_to_Requested", False, False)
-  while (modbus_get_signal_status("Action_Status", False) == True):
-    sync()
-  end
-  
-  #Awaiting the activation of the gripper
-  while (not(modbus_get_signal_status("Gripper_Status1", False) ==  True )):
-    sync()
-  end
-  while (not(modbus_get_signal_status("Gripper_Status2", False) ==  True )):
-    sync()
-  end
-'''
+
+SCRIPT_URP = '''<URProgram createdIn="3.0.0" lastSavedIn="3.0.0" name="%s" directory="/" installation="default">
+  <children>
+    <MainProgram runOnlyOnce="false" motionType="MoveJ" speed="1.0471975511965976" acceleration="1.3962634015954636" useActiveTCP="false">
+      <children>
+        <Script type="File">
+          <cachedContents>%s
+</cachedContents>
+          <file resolves-to="file">%s</file>
+        </Script>
+      </children>
+    </MainProgram>
+  </children>
+</URProgram>'''
 
 
+def get_safe_name(progname):
+    """Get a safe program name"""
+    for c in r'-[]/\;,><&*:%=+@!#^()|?^':
+        progname = progname.replace(c,'')
+    if len(progname) <= 0:
+        progname = 'Program'
+    if progname[0].isdigit():
+        progname = 'P' + progname    
+    return progname
 
 
 # ----------------------------------------------------
@@ -160,6 +72,7 @@ HEADER_PROG = '''#--------------- ROBOTIQ GRIPPER UTILITY
 from robodk import *
 
 # ----------------------------------------------------
+
 def pose_2_ur(pose):
     """Calculate the p[x,y,z,rx,ry,rz] position for a pose target"""
     def saturate_1(value):
@@ -209,38 +122,41 @@ class RobotPost(object):
     PROG_FILES = []
     MAIN_PROGNAME = 'unknown'
     
-    PROG = ''
+    nPROGS = 0
+    PROG = []
+    SUBPROG = []
     TAB = ''
     LOG = ''    
     
     def __init__(self, robotpost=None, robotname=None, robot_axes = 6, **kwargs):
         self.ROBOT_POST = robotpost
         self.ROBOT_NAME = robotname
-        self.nPROGS = 0
-        self.PROG = ''
-        self.LOG = ''
         
     def ProgStart(self, progname):
+        progname = get_safe_name(progname)
         self.nPROGS = self.nPROGS + 1
-        self.addline('def %s():' % progname)        
-        self.TAB = '  '
-        if self.nPROGS == 1:
-            self.MAIN_PROGNAME = progname
-            self.addline(HEADER_PROG)            
-            self.addline('# default parameters:')
-            self.addline('global speed_ms    = %.3f' % self.SPEED_MS)
-            self.addline('global speed_rads  = %.3f' % self.SPEED_RADS)    
-            self.addline('global accel_mss   = %.3f' % self.ACCEL_MSS)
-            self.addline('global accel_radss = %.3f' % self.ACCEL_RADSS)
-            self.addline('global blend_radius_m = %.3f' % self.BLEND_RADIUS_M)        
+        if self.nPROGS <= 1:
+            self.TAB = '  '
+            self.MAIN_PROGNAME = progname    
+        else:
+            self.addline('  # Subprogram %s' % progname)   
+            self.addline('  def %s():' % progname)
+            self.TAB = '    '         
         
     def ProgFinish(self, progname):
+        progname = get_safe_name(progname)
         self.TAB = ''
-        self.addline('end')
+        if self.nPROGS <= 1:
+            self.addline('  # End of main program')
+            self.addline('end')            
+        else:
+            self.addline('  end')
+            
         self.addline('')
                 
     def ProgSave(self, folder, progname, ask_user = False, show_result = False):
-        self.addline('%s()' % self.MAIN_PROGNAME)
+        progname = get_safe_name(progname)
+        self.PROG.append('%s()' % self.MAIN_PROGNAME)
         progname = progname + '.' + self.PROG_EXT
         if ask_user or not DirExists(folder):
             filesave = getSaveFile(folder, progname, 'Save program as...')
@@ -249,12 +165,45 @@ class RobotPost(object):
             else:
                 return
         else:
-            filesave = folder + '/' + progname
+            filesave = folder + '/' + progname        
+            
         fid = open(filesave, "w")
-        fid.write(self.PROG)
+        fid.write('def %s():\n' % self.MAIN_PROGNAME)
+        fid.write('  # Default parameters:\n')
+        fid.write('  global speed_ms    = %.3f\n' % self.SPEED_MS)
+        fid.write('  global speed_rads  = %.3f\n' % self.SPEED_RADS)    
+        fid.write('  global accel_mss   = %.3f\n' % self.ACCEL_MSS)
+        fid.write('  global accel_radss = %.3f\n' % self.ACCEL_RADSS)
+        fid.write('  global blend_radius_m = %.3f\n' % self.BLEND_RADIUS_M)
+        fid.write('  \n')
+        fid.write('  # Add any suprograms here\n')
+        for line in self.SUBPROG:
+            fid.write(line)
+
+        fid.write('  # Main program:\n')
+        for line in self.PROG:
+            fid.write(line)
+            
         fid.close()
         print('SAVED: %s\n' % filesave) # tell RoboDK the path of the saved file
         self.PROG_FILES = filesave
+        
+        #---------------------------- SAVE URP (GZIP compressed XML file)-------------------------
+        #filesave_urp = filesave[:-8]+'.urp'
+        #fid = open(filesave, "r")        
+        #prog_final = fid.read()
+        #fid.close()
+        #self.PROG_XML = SCRIPT_URP % (self.MAIN_PROGNAME, prog_final, self.MAIN_PROGNAME+'.script')
+        #
+        ### Comment next line to force transfer of the SCRIPT file
+        #self.PROG_FILES = filesave_urp
+        #
+        #import gzip
+        #with gzip.open(filesave_urp, 'wb') as fid_gz:
+        #    fid_gz.write(self.PROG_XML.encode('utf-8'))
+        #    
+        #print('SAVED: %s\n' % filesave_urp) # tell RoboDK the path of the saved file
+        #------------------------------------------------------------------------------------------
         
         # open file with default application
         if show_result:
@@ -275,7 +224,49 @@ class RobotPost(object):
     def ProgSendRobot(self, robot_ip, remote_path, ftp_user, ftp_pass):
         """Send a program to the robot using the provided parameters. This method is executed right after ProgSave if we selected the option "Send Program to Robot".
         The connection parameters must be provided in the robot connection menu of RoboDK"""
-        UploadFTP(self.PROG_FILES, robot_ip, remote_path, ftp_user, ftp_pass)
+        #UploadFTP(self.PROG_FILES, robot_ip, remote_path, ftp_user, ftp_pass)
+        #return
+        
+        with open(self.PROG_FILES, 'rb') as progfile:
+            import socket
+            print("POPUP: Connecting to robot...")
+            sys.stdout.flush()
+            robot_socket = socket.create_connection((robot_ip, 30002))
+            print("POPUP: Sending program")
+            sys.stdout.flush()
+            robot_socket.send(progfile.read())
+            print("POPUP: Sending program...")
+            sys.stdout.flush()            
+            pause(1)
+            received = robot_socket.recv(4096)
+            robot_socket.close()
+                            
+            if received:
+                #print("POPUP: Program running")
+                print(str(received))
+                sys.stdout.flush()
+                idx_error = -1
+                try:
+                    idx_error = received.index(b'error')
+                except:
+                    pass
+                if idx_error >= 0:
+                    idx_error_end = min(idx_error + 20, len(received))
+                    try:
+                        idx_error_end = received.index(b'\0',idx_error)
+                    except:
+                        pass
+                    print("POPUP: Robot response: <strong>" + received[idx_error:idx_error_end].decode("utf-8") + "</strong>")
+                    sys.stdout.flush()
+                    pause(5)
+                else:
+                    print("POPUP: Program sent. The program should be running on the robot.")
+                    sys.stdout.flush()
+            else:
+                print("POPUP: Problems running program...")
+                sys.stdout.flush()
+            
+        pause(2)
     
     def blend_radius_check(self, pose):
         # check that the blend radius covers 40% of the move (at most)
@@ -286,7 +277,7 @@ class RobotPost(object):
         else:            
             distance = norm(subs3(self.LAST_POS, current_pos)) # in mm
             if 0.4*distance < self.BLEND_RADIUS_M*1000:
-                blend_radius = '%.3f' % (0.4*distance*0.001)
+                blend_radius = '%.3f' % (max(0.4*distance*0.001, 0.001))
         self.LAST_POS = current_pos
         return blend_radius
         
@@ -307,14 +298,49 @@ class RobotPost(object):
         if pose is None:
             blend_radius = "0"
             self.LAST_POS = None
+            target = angles_2_str(joints)
         else:
             blend_radius = self.blend_radius_check(pose)
-        self.addline('movel(%s,accel_mss,speed_ms,0,%s)' % (angles_2_str(joints), blend_radius))
+            target = pose_2_str(self.REF_FRAME*pose)
+        #self.addline('movel(%s,accel_mss,speed_ms,0,%s)' % (angles_2_str(joints), blend_radius))
+        self.addline('movel(%s,accel_mss,speed_ms,0,%s)' % (target, blend_radius))
+        
         
     def MoveC(self, pose1, joints1, pose2, joints2, conf_RLF_1=None, conf_RLF_2=None):
         """Add a circular movement"""
-        blend_radius = self.blend_radius_check(pose2)
-        self.addline('movec(%s,%s,accel_mss,speed_ms,%s)' % (angles_2_str(joints1),angles_2_str(joints2), blend_radius))
+        def circle_radius(p0,p1,p2):
+            a = norm(subs3(p0,p1))
+            b = norm(subs3(p1,p2))
+            c = norm(subs3(p2,p0))
+            radius = a*b*c/sqrt(pow(a*a+b*b+c*c,2)-2*(pow(a,4)+pow(b,4)+pow(c,4)))            
+            return radius
+            
+        def distance_p1_p02(p0,p1,p2):
+            v01 = subs3(p1, p0)
+            v02 = subs3(p2, p0)
+            return dot(v02,v01)/dot(v02,v02)
+            
+        p0 = self.LAST_POS
+        p1 = pose1.Pos()
+        p2 = pose2.Pos()
+        if p0 is None:
+            self.MoveL(pose2, joints2, conf_RLF_2)
+            return
+            
+        radius = circle_radius(p0, p1, p2)        
+        if radius < 1 or radius > 100000:
+            self.MoveL(pose2, joints2, conf_RLF_2)
+            return
+        
+        d_p1_p02 = distance_p1_p02(p0, p1, p2)
+        if d_p1_p02 < 1:
+            self.MoveL(pose2, joints2, conf_RLF_2)
+            return      
+            
+        blend_radius = self.blend_radius_check(pose1)
+        self.LAST_POS = pose2.Pos()
+        #self.addline('movec(%s,%s,accel_mss,speed_ms,%s)' % (angles_2_str(joints1),angles_2_str(joints2), blend_radius))
+        self.addline('movec(%s,%s,accel_mss,speed_ms,%s)' % (pose_2_str(self.REF_FRAME*pose1),pose_2_str(self.REF_FRAME*pose2), blend_radius))
         
     def setFrame(self, pose, frame_id=None, frame_name=None):
         """Change the robot reference frame"""
@@ -414,7 +440,10 @@ class RobotPost(object):
 # ------------------ private ----------------------                
     def addline(self, newline):
         """Add a program line"""
-        self.PROG = self.PROG + self.TAB + newline + '\n'
+        if self.nPROGS <= 1:
+            self.PROG.append(self.TAB + newline + '\n')
+        else:
+            self.SUBPROG.append(self.TAB + newline + '\n')
         
     def addlog(self, newline):
         """Add a log message"""
@@ -463,7 +492,8 @@ def test_post():
     robot.MoveL(Pose([250, 150, 191.421356, 180, 0, -150]), [-43.82111, 3.29703, -40.29493, 56.02402, 56.61169, -249.23532] )
     robot.ProgFinish("Program")
     # robot.ProgSave(".","Program",True)
-    print(robot.PROG)
+    for line in robot.PROG:
+        print(line[:-1])
     if len(robot.LOG) > 0:
         mbox('Program generation LOG:\n\n' + robot.LOG)
 

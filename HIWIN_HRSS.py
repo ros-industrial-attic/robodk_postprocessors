@@ -37,7 +37,7 @@
 # ----------------------------------------------------
 # More information about RoboDK Post Processors and Offline Programming here:
 #     http://www.robodk.com/help#PostProcessor
-#     http://www.robodk.com/doc/PythonAPI/postprocessor.html
+#     http://www.robodk.com/doc/en/PythonAPI/postprocessor.html
 # ----------------------------------------------------
 
 
@@ -81,6 +81,16 @@ def angles_2_str(angles):
         str = str + ('%s %.5f,' % (data[i], angles[i]))
     str = str[:-1]
     return str
+    
+def get_safe_name(varname):
+    """Get a safe program name"""
+    for c in r' -[]/\;,><&*:%=+@!#^|?^':
+        varname = varname.replace(c,'_')
+    if len(varname) <= 0:
+        varname = 'Program'
+    if varname[0].isdigit():
+        varname = 'P' + varname    
+    return varname
 
 # ----------------------------------------------------    
 # Object class that handles the robot instructions/syntax
@@ -180,6 +190,9 @@ class RobotPost(object):
                 # Open file with provided application
                 import subprocess
                 p = subprocess.Popen([show_result, filesave])
+            elif type(show_result) is list:
+                import subprocess
+                p = subprocess.Popen(show_result + [filesave])   
             else:
                 # open file with default application
                 import os
@@ -241,21 +254,27 @@ class RobotPost(object):
         
     def MoveC(self, pose1, joints1, pose2, joints2, conf_RLF_1=None, conf_RLF_2=None):
         """Add a circular movement"""
-        self.addline('CIRC {' + pose_2_str_ext(pose1,joints1) + '},{' + pose_2_str_ext(pose2,joints2) + '}' + self.C_DIS + ' Vel=%.1fmm/s TOOL[%i] BASE[%i]' % (self.SPEED_MMS,self.ID_TOOL,self.ID_BASE))
+        self.addline('CIRC {' + pose_2_str_ext(pose1,joints1) + '}{' + pose_2_str_ext(pose2,joints2) + '}' + self.C_DIS + ' Vel=%.1fmm/s TOOL[%i] BASE[%i]' % (self.SPEED_MMS,self.ID_TOOL,self.ID_BASE))
         
     def setFrame(self, pose, frame_id=None, frame_name=None):
         """Change the robot reference frame"""
-        if frame_id is None or frame_id < 0:
-            frame_id = 0
+        if frame_id is None or frame_id < 1:
+            frame_id = 1
+        frame_name = get_safe_name(frame_name)
         self.ID_BASE = frame_id
-        self.addline('BASE[' + str(frame_id) + '] = {' + pose_2_str(pose) + '}')          
+        self.addline('FRAME ' + frame_name + '={' + pose_2_str(pose) + '}')
+        self.addline('SET_BASE ' + str(frame_id))
+        self.addline('SET_BASE ' + frame_name)       
         
     def setTool(self, pose, tool_id=None, tool_name=None):
         """Change the robot TCP"""
-        if tool_id is None or tool_id < 0:
+        if tool_id is None or tool_id < 1:
             tool_id = 0
+        tool_name = get_safe_name(tool_name)
         self.ID_TOOL = tool_id
-        self.addline('TOOL[' + str(tool_id) + '] = {' + pose_2_str(pose) + '}')     
+        self.addline('FRAME ' + tool_name + '={' + pose_2_str(pose) + '}')
+        self.addline('SET_TOOL ' + str(tool_id))
+        self.addline('SET_TOOL ' + tool_name)   
         
     def Pause(self, time_ms):
         """Pause the robot program"""
