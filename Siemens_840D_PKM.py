@@ -112,12 +112,17 @@ class RobotPost(object):
     
     
     # ----------------------------------------------------
-    def pose_2_str(self, pose, remember_last=False):
+    def pose_2_str(self, pose, remember_last=False, joints=None):
         """Prints a pose target"""
-        [x,y,z,a,b,c] = Pose_2_Staubli(pose)
+        x,y,z = pose.Pos()
+        i,j,k = pose.VZ()
         x = x * MM_2_UNITS
         y = y * MM_2_UNITS
         z = z * MM_2_UNITS
+        strjnts = ''
+        if joints is not None and len(joints) > 5:
+            strjnts = " Y2=%.3f" % joints[5]
+            
         if remember_last:
             G_LINE = ''
             if self.LAST_X != x:
@@ -126,21 +131,21 @@ class RobotPost(object):
                 G_LINE += 'Y%.3f ' % y
             if self.LAST_Z != z or len(G_LINE) == 0:
                 G_LINE += 'Z%.3f ' % z
-            G_LINE += 'A=%.3f ' % a
-            G_LINE += 'B=%.3f ' % b
-            G_LINE += 'C=%.3f ' % c
+            G_LINE += 'A3=%.3f ' % i
+            G_LINE += 'B3=%.3f ' % j
+            G_LINE += 'C3=%.3f ' % k
             self.LAST_X = x
             self.LAST_Y = y
             self.LAST_Z = z            
             G_LINE = G_LINE[:-1]        
-            return G_LINE
+            return G_LINE + strjnts
         else:
-            return ('X%.3f Y%.3f Z%.3f A%.3f B%.3f C%.3f' % (x,y,z,a,b,c))
+            return ('X%.3f Y%.3f Z%.3f A3%.3f B3%.3f C3%.3f%s' % (x,y,z,i,j,k,strjnts))
         
     def joints_2_str(self, joints):
         """Prints a joint target"""
         str = ''
-        data = ['JT1','JT2','JT3','A','B','C','G','H','I','J','K','L']
+        data = ['ST1','ST2','ST3','A','C','G','H','I','J','K','L']
         for i in range(len(joints)):
             str = str + ('%s=%.6f ' % (data[i], joints[i]))
         str = str[:-1]
@@ -160,38 +165,22 @@ class RobotPost(object):
             import datetime
             self.addcomment('File: %s' % progname)
             self.addcomment('Created on %s' % datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-            self.addcomment('Program created using RoboDK')            
+            self.addcomment('Program created using RoboDK')
             if MM_2_UNITS == 1.0:
-                self.addline('G17 G710 G40 ; XY plane selection, metric, no tool radius compensation')
+                self.addline('G710 G40 ; metric, no tool radius compensation')
             elif MM_2_UNITS == 1.0/25.4:
-                self.addline('G17 G700 G40 ; XY plane selection, inch')
+                self.addline('G700 G40 ; inch, no tool radius compensation')
             else:
                 raise Exception("Unknown units!! Define MM_2_UNITS properly.")
-                
-            self.addline('TRAORI')
-            self.TRAORI = True
-            self.addline('M32')
-            self.addline('G54')
-            self.addline('G90') # Absolute coordinates G91 (relative)
-            self.addline('G64')            
-            #self.addline('; $P_UIFR[1]=CTRANS(X,0,Y,0,Z,0):CROT(X,0,Y,0,Z,0) ; Clear reference frame')
-            #self.addline('G54')
-            self.addline('ORIWKS') # Use custom work coordinate system and how they are interpreted
-            self.addline('ORIVIRT1')
-            #self.addline('; CYCLE832(0.001,_ORI_FINISH,0.01) ; contour smoothing (requires appropriate license)')
-            #self.addline('PTPG0') # Do not output. If we used G0 it would not work.
-            self.addline('STOPRE ; stop preprocessing')
-            self.addline('; R6=1.181')            
-            self.addline('; R19=0.00')
-            self.addline('; R20=83.00')
-            #self.addcomment('R19 = Part Area in SqFt')
-            #self.addcomment('R20 = Variable to set the F speed')
-            self.addline('STOPRE')
-            #self.addcomment('T1 BLADE1')
-            #self.addcomment('T1 D1 ; should be called after setting the TCP')
-            self.addline('; M3 S7458 ; Generic way to turn on the spindle') # Generic way to turn on the spindle 
-            self.addline('S1700.0 M80 ; Customized Spindle speed and power on')
-            self.addcomment('---- Program start ----')
+            
+            self.addline('G17 G94 G90 G60 G601 FNORM')            
+            self.addline('SOFT ; Smooth acceleration')            
+            self.addline('FFWON ; Look ahead')
+            self.addline('FIFOCTRL')
+            self.addline('G645')
+            self.addline('DYNNORM ; Specific settings for acceleration')
+            self.addline('COMPCAD ; Not working with radius compensation')
+            self.addcomment('')
             
         else:
             self.addcomment('')
@@ -203,11 +192,15 @@ class RobotPost(object):
         
         
     def ProgFinish(self, progname):
-        if self.PROG_COUNT <= 1:            
+        if self.PROG_COUNT <= 1:    
+            self.addcomment('')
+            self.addcomment('Stop Spindle')
+            self.addline('M5')
+            self.addcomment('')
             self.addcomment('End of main program ' + progname)
             self.addline('M30')
             self.addcomment('---------------------------')
-            self.addcomment('')           
+            self.addcomment('')
         else:
             #self.addline('RET("%s_done")' % progname) # needs to be in a file as SPF
             #self.addline('M17 ; end of subprogram %s' % progname) # needs to be in a file as SPF
@@ -281,13 +274,13 @@ class RobotPost(object):
             self.addline('G1 ' + self.joints_2_str(joints) + ' F%.1f' % self.SPEED_UNITS_MIN)
         else:
             self.set_cartesian_space()                
-            self.addline('G1 ' + self.pose_2_str(self.REF_FRAME * pose * self.INV_TOOL_FRAME, True) + ' F%.1f' % self.SPEED_UNITS_MIN)
+            self.addline('G1 ' + self.pose_2_str(self.REF_FRAME * pose * self.INV_TOOL_FRAME, True, joints) + ' F%.1f' % self.SPEED_UNITS_MIN)
             #self.addline('PTP G1 ' + self.pose_2_str(self.REF_FRAME * pose * self.INV_TOOL_FRAME, True) + ' STAT=%i TU=%i F%.1f' % (conf_2_STAT(conf_RLF), joints_2_TU(joints), self.SPEED_UNITS_MIN))
             # Note: it is important to have 
             return            
             
             if self.LAST_POSE is None:
-                self.addline('G1 ' + self.pose_2_str(self.REF_FRAME * pose * self.INV_TOOL_FRAME, True) + ' F%.1f' % self.SPEED_UNITS_MIN)
+                self.addline('G1 ' + self.pose_2_str(self.REF_FRAME * pose * self.INV_TOOL_FRAME, True, joints) + ' F%.1f' % self.SPEED_UNITS_MIN)
             else:
                 pose_shift = invH(self.LAST_POSE)*pose
                 angle = pose_angle(pose_shift)*180/pi
@@ -326,19 +319,16 @@ class RobotPost(object):
         """Change the robot reference frame"""
         self.addcomment('------ Update reference: %s ------' % (frame_name if frame_name is not None else ''))
         #self.addline('TRAORI')
-        self.set_cartesian_space()
-        #if frame_id is not None and frame_id > 0:
-        #    self.addcomment('Using controller definition for tool %i' % frame_id)
-        #    self.addline('G%i' % (frame_id+54-1))
-        #    return
-              
+        self.set_cartesian_space()              
         [x,y,z,a,b,c] = Pose_2_Staubli(pose)
         x = x * MM_2_UNITS
         y = y * MM_2_UNITS
         z = z * MM_2_UNITS
-        self.addline('$P_UIFR[1]=CTRANS(X,%.5f,Y,%.5f,Z,%.5f):CROT(X,%.5f,Y,%.5f,Z,%.5f)' % (x,y,z,a,b,c))
+        self.addline('; $P_UIFR[1]=CTRANS(X,%.5f,Y,%.5f,Z,%.5f):CROT(X,%.5f,Y,%.5f,Z,%.5f)' % (x,y,z,a,b,c))
         self.addline('G54')
         self.addcomment('---------------------------')
+        self.addcomment('')
+        
         
     def setTool(self, pose, tool_id=None, tool_name=None):
         """Change the robot TCP"""
@@ -357,17 +347,19 @@ class RobotPost(object):
         z = z * MM_2_UNITS
         self.INV_TOOL_FRAME = invH(pose)
         self.INV_TOOL_FRAME.setPos([0,0,0])
-        self.addline('$TC_DP5[1,1]=%.5f' % x)
-        self.addline('$TC_DP4[1,1]=%.5f' % y)
-        self.addline('$TC_DP3[1,1]=%.5f' % z)
+        self.addcomment('$TC_DP5[1,1]=%.5f' % x)
+        self.addcomment('$TC_DP4[1,1]=%.5f' % y)
+        self.addcomment('$TC_DP3[1,1]=%.5f' % z)
         #self.addline('$TC_DPC3[1,1]=%.5f' % a)        
         #self.addline('$TC_DPC2[1,1]=%.5f' % b)
         #self.addline('$TC_DPC1[1,1]=%.5f' % c)
-        self.addline('$TC_DPC3[1,1]=0.0')        
-        self.addline('$TC_DPC2[1,1]=0.0')
-        self.addline('$TC_DPC1[1,1]=0.0')
-        self.addline('T1 D1') # Use tool 1 profile 1
-        self.addcomment('---------------------------- ')        
+        self.addcomment('$TC_DPC3[1,1]=0.0')        
+        self.addcomment('$TC_DPC2[1,1]=0.0')
+        self.addcomment('$TC_DPC1[1,1]=0.0')
+        self.addline('T="%s" D1' % tool_name) # Use tool 1 profile 1
+        
+        self.addcomment('---------------------------- ')
+        self.addcomment('')
         
     def Pause(self, time_ms):
         """Pause the robot program"""
@@ -441,8 +433,15 @@ class RobotPost(object):
         if is_function_call:
             code.replace(' ','_')
             #self.addline(code)
-            self.addline('GOTOF ' + code)
-            self.addline(code + '_done:')
+            
+            if code.lower().startswith("setrpm("):
+                # if the program call is Extruder(123.56), we extract the number as a string and convert it to a number
+                new_rpm = float(code[7:-1]) # it needs to retrieve the extruder length from the program call
+                self.addline('S' + code)
+                
+            else:
+                self.addline('GOTOF ' + code)
+                self.addline(code + '_done:')
             
         else:
             self.addcomment(code)
@@ -457,7 +456,7 @@ class RobotPost(object):
 # ------------------ private ----------------------                
     def addline(self, newline):
         """Add a program line"""
-        self.Nline = self.Nline + 1
+        self.Nline = self.Nline + 10
         self.PROG = self.PROG + ('N%02i ' % self.Nline) + newline + '\n'        
         
     def addcomment(self, newline):

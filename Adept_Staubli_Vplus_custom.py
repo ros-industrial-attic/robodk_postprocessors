@@ -37,7 +37,7 @@
 # ----------------------------------------------------
 # More information about RoboDK Post Processors and Offline Programming here:
 #     http://www.robodk.com/help#PostProcessor
-#     http://www.robodk.com/doc/PythonAPI/postprocessor.html
+#     http://www.robodk.com/doc/en/PythonAPI/postprocessor.html
 # ----------------------------------------------------
 
 
@@ -55,13 +55,13 @@ def pose_2_str(pose,joints=None,reference=None):
     
 def angles_2_str(angles):
     """Contverts a joint target to a string"""
-    return '{%s}' % (','.join(format(ji, ".5f") for ji in angles))
+    return '(%s)' % (','.join(format(ji, ".5f") for ji in angles))
 
 # ----------------------------------------------------    
 # Object class that handles the robot instructions/syntax
 class RobotPost(object):
     """Robot post object"""
-    PROG_EXT = 'txt'        # set the program extension
+    PROG_EXT = 'V2'        # set the program extension
     
     # other variables
     ROBOT_POST = ''
@@ -112,6 +112,9 @@ class RobotPost(object):
                 # Open file with provided application
                 import subprocess
                 p = subprocess.Popen([show_result, filesave])
+            elif type(show_result) is list:
+                import subprocess
+                p = subprocess.Popen(show_result + [filesave])   
             else:
                 # open file with default application
                 import os
@@ -126,7 +129,8 @@ class RobotPost(object):
         
     def MoveJ(self, pose, joints, conf_RLF=None):
         """Add a joint movement"""
-        self.addline('MOVE ' + pose_2_str(pose,joints,self.REF_FRAME))
+        self.addline("MOVE #PPOINT" + angles_2_str(joints))
+        #self.addline('MOVE ' + pose_2_str(pose,joints,self.REF_FRAME))
         
     def MoveL(self, pose, joints, conf_RLF=None):
         """Add a linear movement"""

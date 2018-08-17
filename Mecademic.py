@@ -37,7 +37,7 @@
 # ----------------------------------------------------
 # More information about RoboDK Post Processors and Offline Programming here:
 #     http://www.robodk.com/help#PostProcessor
-#     http://www.robodk.com/doc/PythonAPI/postprocessor.html
+#     http://www.robodk.com/doc/en/PythonAPI/postprocessor.html
 # ----------------------------------------------------
 
 
@@ -46,25 +46,58 @@
 from robodk import *
 from robolink import *
 
-ROBOT_CLASS = '''class MecaRobot:
+PATH_PYTHON = ''
+#PATH_PYTHON = 'C:/Python34/python'
+
+ROBOT_CLASS = '''
+def print_message(message):
+    """Force a print output"""
+    print(message)
+    sys.stdout.flush()
+    
+def msg_info(robot_msg):
+    if robot_msg is None:
+        return False, -1, "No communication"        
+    problems = False
+    msg_id = int(robot_msg[1:5])
+    msg_str = robot_msg[7:-2]
+    # msg_id = 1000 to 1500 are error codes
+    if msg_id < 1500:
+        problems = True            
+    else:
+        # Other error codes
+        error_codes = [3001, 3003]
+        if msg_id in error_codes:
+            problems = True            
+    if problems:
+        print_message(robot_msg)
+    return problems, msg_id, msg_str
+    
+class MecaRobot:
     """Robot class for programming Mecademic robots"""
     def __init__(self, ip, port):
         import socket
         self.BUFFER_SIZE = 512 # bytes
-        self.TIMEOUT = 60 # seconds
+        self.TIMEOUT = 999999 # seconds
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.settimeout(self.TIMEOUT)
-        print('Connecting to robot %s:%i' % (ip, port))
+        print_message('Connecting to robot %s:%i' % (ip, port))
         self.sock.connect((ip, port))
-        print('Waiting for welcome message...')
-        time.sleep(2)
+        print_message('Waiting for welcome message...')
         
-        # receive welcome message
-        print(self.recv_str())
+        # receive welcome message and output to the log
+        problems, msg_id, msg_str = msg_info(self.recv_str())
+        if problems:
+            print_message(msg_str)
+            raise Exception(msg_str)
+            return
         
-        # send activate robot and read confirmation
-        self.Run('ActivateRobot')
-        self.Run('Home')
+        # Reset errors, send activate robot and read confirmation
+        self.sock.settimeout(10)
+        self.Run('ResetError',sync=True)
+        self.Run('ActivateRobot',sync=True)
+        self.sock.settimeout(30)
+        self.Run('Home',sync=True)
 
     def send_str(self, msg):
         sent = self.sock.send(bytes(msg+'\\0','ascii'))
@@ -77,21 +110,42 @@ ROBOT_CLASS = '''class MecaRobot:
             raise RuntimeError("Robot connection broken")
         return bdata.decode('ascii')
         
-    def Run(self, cmd, values=None):
+    def Run(self, cmd, values=None, sync=False):
         if isinstance(values, list):
-            str_send = cmd + '(' + (','.join(format(vi, ".6f") for vi in values)) + ')'
+            if cmd == "Gripper":
+                str_send = cmd + '(' + (','.join(format(vi, ".0f") for vi in values)) + ')'
+            else:
+                str_send = cmd + '(' + (','.join(format(vi, ".6f") for vi in values)) + ')'
         elif values is None:
             str_send = cmd
         else:
             str_send = cmd + '(' + str(values) + ')'
+        
+        print_message('Running: %s' % str_send)
+        
+        # send command to robot
         self.send_str(str_send)
-        print('Running: %s' % str_send)
-        print('    Received: %s' % self.recv_str())        
+        if sync:
+            robot_msg = self.recv_str()
+            problems, msg_id, msg_str = msg_info(robot_msg)
+            print_message('Received: %s' % robot_msg)
+            if problems:
+                raise Exception(msg_str)          
+        return True
         
 if __name__ == "__main__":
     """Call Main procedure"""
+    # It is important to disconnect the robot if we force to stop the process
+    import atexit
+    atexit.register(RobotDisconnect)
+    
 '''
 
+
+def print_message(message):
+    print(message)
+    sys.stdout.flush()
+    
 # ----------------------------------------------------
 def pose_2_str(pose):
     """Prints a pose target"""
@@ -145,10 +199,14 @@ class RobotPost(object):
             self.addline('RobotConnect()')
         else:
             self.addline('global robot')
+        self.addline('print_message("Running program %s...")' % progname)
         
     def ProgFinish(self, progname):
+        self.addline('print_message("Program %s Sent")' % progname)
         if self.Prog_count == 1:
-            self.addline('input("Program finished. Press Enter to disconnect.")')
+            #self.addline('import time')
+            #self.addline('time.pause(2)')
+            pass
         self.TAB = ''
         self.addline('')        
         
@@ -175,28 +233,62 @@ class RobotPost(object):
         fid.write('MECA_IP = "%s"   # IP of the robot\n' % server_ip) #self.ROBOT_IP)
         fid.write('MECA_PORT = %i   # Communication port\n\n' % self.ROBOT_PORT)
         fid.write('import time\n')
+        fid.write('import sys\n')        
         fid.write('global robot\n\n')
         fid.write(self.PROG)
+
+        fid.write('def Gripper(set_open=0):\n')
+        fid.write('    global robot\n')
+        fid.write('    robot.Run("Gripper", [set_open])\n')
+        fid.write('\n')        
         fid.write('def RobotConnect():\n')
         fid.write("    '''Establish connection with the robot'''\n")
         fid.write('    global robot\n')
         fid.write('    robot = MecaRobot(MECA_IP, MECA_PORT)\n\n')
+        fid.write('def RobotDisconnect():\n')
+        fid.write("    '''Establish connection with the robot'''\n")
+        fid.write('    global robot\n')
+        fid.write('    try:\n')
+        fid.write('        if robot.sock != None:\n')        
+        fid.write('            robot.sock.close()\n')        
+        fid.write('            robot.sock = None\n')
+        fid.write('    except Exception as e:\n')
+        fid.write('        print_message(str(e))\n')
         fid.write('\n#----------- communication class -------------\n')
         fid.write(ROBOT_CLASS)
-        fid.write('    %s()' % self.MAIN_PROG_NAME)
+        fid.write('    %s()\n' % self.MAIN_PROG_NAME)
+        fid.write('    \n')
+        fid.write('    print_message("Program sent.\\nWaiting for program to finish...")\n')
+        fid.write('    robot.sock.settimeout(1e6)\n')
+        fid.write('    \n')
+        fid.write('    problems, msg_id, msg_str = msg_info(robot.recv_str())\n')
+        fid.write('    while not problems and msg_id != 3012:\n')
+        fid.write('        print_message("Working... (" + msg_str + ")")\n')
+        fid.write('        problems, msg_id, msg_str = msg_info(robot.recv_str())\n')
+        fid.write('    \n')
+        fid.write('    print_message("Done. Closing in 2 seconds...")\n')
+        fid.write('    time.sleep(2)\n\n')
+        fid.write('    \n')
+        fid.write('    RobotDisconnect()\n')        
+        #fid.write('    # pause execution before closing process (allows users to read last message)\n')
+        #fid.write('    time.sleep(2)\n')
         fid.write('\n\n')
         fid.close()
         print('SAVED: %s\n' % filesave)
         self.PROG_FILES = filesave
         #---------------------- show result
         
-        selection_view = mbox('Do you want to view/edit the program or run it on the robot?', 'View', 'Run')            
+        #selection_view = mbox('Do you want to view/edit the program or run it on the robot?', 'View', 'Run')            
+        selection_view = True
         
         if selection_view and show_result:
             if type(show_result) is str:
                 # Open file with provided application
                 import subprocess
                 p = subprocess.Popen([show_result, filesave])   
+            elif type(show_result) is list:
+                import subprocess
+                p = subprocess.Popen(show_result + [filesave])   
             else:
                 # open file with default application
                 import os
@@ -219,11 +311,52 @@ class RobotPost(object):
     def ProgSendRobot(self, robot_ip, remote_path, ftp_user, ftp_pass):
         """Send a program to the robot using the provided parameters. This method is executed right after ProgSave if we selected the option "Send Program to Robot".
         The connection parameters must be provided in the robot connection menu of RoboDK"""
-        UploadFTP(self.PROG_FILES, robot_ip, remote_path, ftp_user, ftp_pass)
+        import subprocess
+        import os
+        import sys
+        import time
+        
+        print_message("POPUP: Starting process...")     
+        print("Python path " + PATH_PYTHON)
+        print("Program file: " + self.PROG_FILES)
+        
+        # Start process
+        cmd_run = self.PROG_FILES # run py file itself
+        if PATH_PYTHON != '':
+            # if a python path is specified, use it to run the Py file
+            cmd_run = [PATH_PYTHON, self.PROG_FILES]
+            
+        process = subprocess.Popen(cmd_run, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
+        
+        # Poll process for new output until finished
+        for stdout_line in iter(process.stdout.readline, ""):
+            print_message("POPUP: " + stdout_line.strip())
+            
+        process.stdout.close()
+        return_code = process.wait()
+        if return_code != 0:
+            #raise subprocess.CalledProcessError(return_code, cmd_run)
+            pause(2)
+        else:
+            print_message("POPUP: Done.")
+            pause(1)
+
+        #if (return_code == 0):
+        #    return
+        #else:
+        #    #raise ProcessException(command, return_code, output)
+        #    pause(2)
+        #    return
         
     def MoveJ(self, pose, joints, conf_RLF=None):
         """Add a joint movement"""
         self.addline("robot.Run('MoveJoints', %s)" % joints_2_str(joints))
+        
+        # A MoveJ in cartesian space would be:
+        #if pose is not None:
+        #    # self.addline("robot.Run('SetConf', [%i,%i,%i])" % (conf_RLF[0], conf_RLF[1], conf_RLF[2])
+        #    self.addline("robot.Run('MovePose', %s)" % pose_2_str(pose))
+        
         
     def MoveL(self, pose, joints, conf_RLF=None):
         """Add a linear movement"""
@@ -248,13 +381,15 @@ class RobotPost(object):
     def Pause(self, time_ms):
         """Pause the robot program"""
         if time_ms < 0:
+            self.addline("robot.Run('Delay', 0, sync=True)")
             self.addline('input("Robot paused. Press Enter to continue...")')
         else:
-            self.addline('time.sleep(%.3f)' % (float(time_ms)*0.001))
+            #self.addline('time.sleep(%.3f)' % (float(time_ms)*0.001))
+            self.addline("robot.Run('Delay', %s)" % (float(time_ms)*0.001))
     
     def setSpeed(self, speed_mms):
         """Changes the robot speed (in mm/s)"""
-        self.addline("robot.Run('SetCartVel', %.3f)" % speed_mms)
+        self.addline("robot.Run('SetCartVel', %.3f)" % min(speed_mms,500))
     
     def setAcceleration(self, accel_mmss):
         """Changes the robot acceleration (in mm/s2)"""
@@ -287,6 +422,8 @@ class RobotPost(object):
 
         # at this point, io_var and io_value must be string values
         # self.addline('%s=%s' % (io_var, io_value))
+        self.addline("robot.Run('Delay', 0, sync=True)")
+        self.addline('# robot.setDO(%s=%s)' % (io_var, io_value))
         self.addlog('Digital IOs not managed by the robot (%s=%s)' % (io_var, io_value))
 
     def waitDI(self, io_var, io_value, timeout_ms=-1):
@@ -302,9 +439,13 @@ class RobotPost(object):
         # at this point, io_var and io_value must be string values
         if timeout_ms < 0:
             #self.addline('WAIT FOR %s==%s' % (io_var, io_value))
+            self.addline("robot.Run('Delay', 0, sync=True)")
+            self.addline('# robot.waitDI(%s=%s)' % (io_var, io_value))
             self.addlog('Digital IOs not managed by the robot (WAIT FOR %s==%s)' % (io_var, io_value))
         else:
             #self.addline('WAIT FOR %s==%s TIMEOUT=%.1f' % (io_var, io_value, timeout_ms))
+            self.addline("robot.Run('Delay', 0, sync=True)")
+            self.addline('# robot.waitDI(%s=%s, %.0f)' % (io_var, io_value, timeout_ms))
             self.addlog('Digital IOs not managed by the robot (WAIT FOR %s==%s)' % (io_var, io_value))
         
     def RunCode(self, code, is_function_call = False):
@@ -368,6 +509,7 @@ def test_post():
     robot.MoveL(Pose([250, 250, 191.421356, 180, 0, -150]), [-39.75778, -1.04537, -40.37883, 52.09118, 54.15317, -246.94403] )
     robot.RunMessage("Setting air valve off")
     robot.RunCode("TCP_Off", True)
+    robot.RunCode("Gripper(1)", True)
     robot.Pause(1000)
     robot.MoveL(Pose([250, 300, 278.023897, 180, 0, -150]), [-37.52588, -6.32628, -34.59693, 53.52525, 49.24426, -251.44677] )
     robot.MoveL(Pose([250, 200, 278.023897, 180, 0, -150]), [-41.85389, -1.95619, -34.89154, 57.43912, 52.34162, -253.73403] )

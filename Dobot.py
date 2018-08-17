@@ -10,7 +10,8 @@
 # limitations under the License.
 
 # ----------------------------------------------------
-# This file is a sample POST PROCESSOR script to generate robot programs for a B&R Automation controller
+# This file is a POST PROCESSOR for Robot Offline Programming to generate programs 
+# for a Dobot Magician robot with RoboDK
 #
 # To edit/test this POST PROCESSOR script file:
 # Select "Program"->"Add/Edit Post Processor", then select your post or create a new one.
@@ -43,45 +44,107 @@
 # ----------------------------------------------------
 # Import RoboDK tools
 from robodk import *
+from robolink import *
+import os
 
-JOINT_DATA = ['Q1','Q2','Q3','Q4','Q5','Q6','Ra','Rb','Rc']
+# Get 32 bit Python path. IMPORTANT! It must be 32 bit Python (not 64)
+PYTHON_PATH = os.path.abspath(os.getenv('APPDATA') + '/../Local/Programs/Python/Python36-32/python.exe')
+
+# Get Dobot DLL path based on Desktop path
+DOBOT_PATH_DLL = os.path.abspath(os.getenv('HOMEPATH') + '/Desktop/DobotAPI/')
+
+PROGRAM_HEADER = '''# Dobot program generated from RoboDK post processor
+import threading
+import DobotDllType as dType
+import sys
+
+CON_STR = {
+    dType.DobotConnect.DobotConnect_NoError:  "DobotConnect_NoError",
+    dType.DobotConnect.DobotConnect_NotFound: "DobotConnect_NotFound",
+    dType.DobotConnect.DobotConnect_Occupied: "DobotConnect_Occupied"}
+
+#Load Dll
+api = dType.load()
+
+#Connect Dobot
+state = dType.ConnectDobot(api, "", 115200)[0]
+print("Connect status:",CON_STR[state])
+sys.stdout.flush()
+
+if (state != dType.DobotConnect.DobotConnect_NoError):
+    #Disconnect Dobot
+    dType.DisconnectDobot(api)
+    raise Exception("Connection problems: " + CON_STR[state])
+    quit()
+
+#Clean Command Queued
+dType.SetQueuedCmdClear(api)
+
+#Async Motion Params Setting
+dType.SetHOMEParams(api, 200, 200, 200, 200, isQueued = 1)
+dType.SetPTPJointParams(api, 200, 200, 200, 200, 200, 200, 200, 200, isQueued = 1)
+dType.SetPTPCommonParams(api, 100, 100, isQueued = 1)
+
+#Async Home
+dType.SetHOMECmd(api, temp = 0, isQueued = 1)
+
+# Main program definition
+'''
+
+PROGRAM_RUN = '''
+    # Save the index command of the last command (set a short pause)
+    lastIndex = dType.SetWAITCmd(api, 0.1, isQueued = 1)[0]
+    
+    # Start to Execute Queued Commands
+    dType.SetQueuedCmdStartExec(api)
+    
+    # Wait until execution is done by verifying current command
+    while lastIndex > dType.GetQueuedCmdCurrentIndex(api)[0]:
+        dType.dSleep(100)
+'''
+
+ROBOT_DISCONNECT = '''
+#Disconnect Dobot
+dType.DisconnectDobot(api)
+'''
 
 # ----------------------------------------------------
-def pose_2_str(pose, joints = None):
+def pose_2_str(pose):
     """Prints a pose target"""
-    [x,y,z,r,p,w] = Pose_2_KUKA(pose)        
-    str_xyzwpr = 'X %.3f Y %.3f Z %.3f A %.3f B %.3f C %.3f' % (x,y,z,r,p,w)
-    if joints is not None:        
-        if len(joints) > 6:
-            for j in range(6,len(joints)):
-                str_xyzwpr += (' %s %.6f ' % (JOINT_DATA[j], joints[j]))
-    
-    return str_xyzwpr
+    [x,y,z,r,p,w] = Pose_2_TxyzRxyz(pose)
+    #return ('%.3f, %.3f, %.3f, %.3f, %.3f, %.3f' % (x,y,z,r*180.0/pi,p*180.0/pi,w*180.0/pi))
+    return ('%.3f, %.3f, %.3f, %.3f' % (x,y,z, w*180.0/pi))
     
 def joints_2_str(joints):
     """Prints a joint target"""
     str = ''
     for i in range(len(joints)):
-        str = str + ('%s %.6f ' % (JOINT_DATA[i], joints[i]))
-    str = str[:-1]
+        str = str + ('%.6f, ' % joints[i])
+    str = str[:-2]
     return str
 
 # ----------------------------------------------------    
 # Object class that handles the robot instructions/syntax
 class RobotPost(object):
     """Robot post object"""
-    PROG_EXT = 'cnc'        # set the program extension
+    PROG_EXT = 'py'        # set the program extension    
+    ROBOT_IP = '192.168.0.100';
+    ROBOT_PORT = 10000
     
     # other variables
     ROBOT_POST = ''
     ROBOT_NAME = ''
-    PROG_FILES = []
+    PROG_FILES = []    
+    
+    FRAME = eye(4)
+    TOOL = eye(4)
     
     PROG = ''
     LOG = ''
+    TAB = ''
+    MAIN_PROG_NAME = None
     nAxes = 6
-    nId = 0
-    REF_FRAME = eye(4)
+    Prog_count = 0
 
     
     def __init__(self, robotpost=None, robotname=None, robot_axes = 6, **kwargs):
@@ -92,15 +155,38 @@ class RobotPost(object):
         self.nAxes = robot_axes
         
     def ProgStart(self, progname):
-        self.addline('; program: %s()' % progname)
-        self.addline('G161')
-        self.addline('G90')
-        self.addline('F15000')        
+        self.Prog_count = self.Prog_count + 1
+        self.addline('def %s():' % progname)
+        self.TAB = '    '
+        if self.MAIN_PROG_NAME is None:
+            self.MAIN_PROG_NAME = progname
+            self.addline("'''Main procedure'''")
+        else:
+            self.addline("'''Subprogram %s'''" % progname)
+        self.addline("print('Sending program %s ...')" % progname)
         
     def ProgFinish(self, progname):
-        self.addline('; ENDPROC')
+        #if self.Prog_count == 1:
+            #self.PROG.append(PROGRAM_DISCONNECT)
+            #pass
+        self.addline("print('Program %s sent')" % progname)
+        self.addline("sys.stdout.flush()")
+        self.addline("print('Running program %s on robot...')" % progname)
+        self.addline("sys.stdout.flush()")        
+        self.PROG = self.PROG + PROGRAM_RUN
+        self.addline("")
+        self.addline("# Stop executing commands")
+        self.addline("dType.SetQueuedCmdStopExec(api)")
+        self.addline("# Clear all queued commands")
+        self.addline("dType.SetQueuedCmdClear(api)")
+        self.addline("print('Program %s Finished')" % progname)
+        self.addline("sys.stdout.flush()")
+        self.TAB = ''
+        self.addline('')        
+        
         
     def ProgSave(self, folder, progname, ask_user=False, show_result=False):
+        import subprocess
         progname = progname + '.' + self.PROG_EXT
         if ask_user or not DirExists(folder):
             filesave = getSaveFile(folder, progname, 'Save program as...')
@@ -110,13 +196,27 @@ class RobotPost(object):
                 return
         else:
             filesave = folder + '/' + progname
+            
         fid = open(filesave, "w")
+        
+        fid.write(PROGRAM_HEADER)
         fid.write(self.PROG)
+        fid.write('\n')
+        fid.write('# Main program call: set as a loop\n')
+        fid.write('while True:\n')        
+        fid.write('    %s()\n' % self.MAIN_PROG_NAME)
+        fid.write('    break\n')        
+        fid.write(ROBOT_DISCONNECT)
+        fid.write('\n\n')
         fid.close()
         print('SAVED: %s\n' % filesave)
         self.PROG_FILES = filesave
         #---------------------- show result
-        if show_result:
+        
+        #selection_view = mbox('Do you want to view/edit the program or run it on the robot?', 'View', 'Run')            
+        selection_view = True
+        
+        if selection_view and show_result:
             if type(show_result) is str:
                 # Open file with provided application
                 import subprocess
@@ -128,73 +228,129 @@ class RobotPost(object):
                 # open file with default application
                 import os
                 os.startfile(filesave)  
-            
+
             if len(self.LOG) > 0:
                 mbox('Program generation LOG:\n\n' + self.LOG)
-    
+        
+        if not selection_view:
+            #RDK.ShowMessage('Running program...', False)
+            proc = subprocess.Popen(['python', filesave])
+            
+            # Using the same pipe
+            #import io
+            #proc = subprocess.Popen(['python', filesave], stdout=subprocess.PIPE)
+            #for line in io.TextIOWrapper(proc.stdout, encoding="utf-8"):  # or another encoding
+            #    RDK.ShowMessage(line, False)
+        
+        
     def ProgSendRobot(self, robot_ip, remote_path, ftp_user, ftp_pass):
         """Send a program to the robot using the provided parameters. This method is executed right after ProgSave if we selected the option "Send Program to Robot".
         The connection parameters must be provided in the robot connection menu of RoboDK"""
-        UploadFTP(self.PROG_FILES, robot_ip, remote_path, ftp_user, ftp_pass)
+        # retrieve robot IP
+        #RDK = Robolink()
+        #robot = RDK.Item(self.ROBOT_NAME, ITEM_TYPE_ROBOT)
+        #[server_ip, port, remote_path, username, password] = robot.ConnectionParams()    
+        #RDK.ShowMessage('Running program...', False)
+        import subprocess
+        import os
+        import sys
+        
+        process_env = os.environ.copy()
+        process_env["PYTHONPATH"] = DOBOT_PATH_DLL + ";"
+        process_env["PATH"] = DOBOT_PATH_DLL + ":" + process_env["PATH"]
+        
+        print("POPUP: Starting process...")
+        PROGRAM_FILE = os.path.abspath(self.PROG_FILES)
+        print("Python path: " + PYTHON_PATH)
+        print("Program file: " + PROGRAM_FILE)
+        sys.stdout.flush()
+        
+        # Start process
+        process = subprocess.Popen([PYTHON_PATH, PROGRAM_FILE], shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=process_env, universal_newlines=True, cwd=DOBOT_PATH_DLL)
+        
+        # Poll process for new output until finished
+        for stdout_line in iter(process.stdout.readline, ""):
+            print("POPUP: " + stdout_line.strip())
+            sys.stdout.flush()
+            
+        process.stdout.close()
+        return_code = process.wait()
+        if return_code:
+            raise subprocess.CalledProcessError(return_code, [PYTHON_PATH, PROGRAM_FILE])
+
+        if (return_code == 0):
+            import time
+            time.sleep(2)
+            return
+        else:
+            raise ProcessException(command, return_code, output)
         
     def MoveJ(self, pose, joints, conf_RLF=None):
         """Add a joint movement"""
-        self.nId = self.nId + 1
-        self.addline('N%02i G101 ' % self.nId + joints_2_str(joints))
+        # Prioritize a joint move using joint data
+        if joints is not None:
+            self.addline("dType.SetPTPCmd(api, dType.PTPMode.PTPMOVJANGLEMode, %s, isQueued=1)" % joints_2_str(joints))
+        else:
+            robot_pose = self.FRAME*pose*invH(self.TOOL)
+            self.addline("dType.SetPTPCmd(api, dType.PTPMode.PTPMOVLXYZMode, %s, isQueued=1)" % pose_2_str(robot_pose))
         
     def MoveL(self, pose, joints, conf_RLF=None):
         """Add a linear movement"""
-        self.nId = self.nId + 1
-        self.addline('N%02i G1 ' % self.nId + pose_2_str(self.REF_FRAME*pose, joints))
-        #self.addline('N%02i G90 G1 ' % self.nId + joints_2_str(joints))
+        # Prioritize a linear move using joint data
+        if joints is not None:
+            self.addline("dType.SetPTPCmd(api, dType.PTPMode.PTPMOVJANGLEMode, %s, isQueued=1)" % joints_2_str(joints))
+        else:
+            robot_pose = self.FRAME*pose*invH(self.TOOL)
+            self.addline("dType.SetPTPCmd(api, dType.PTPMode.PTPMOVLXYZMode, %s, isQueued=1)" % pose_2_str(robot_pose))
         
-    def MoveC(self, pose1, joints1, pose2, joints2, conf_RLF_1=None, conf_RLF_2=None):
+    def MoveC(self, pose1, joints1, pose2, joints2, conf_RLF_1, conf_RLF_2):
         """Add a circular movement"""
-        self.nId = self.nId + 1
-        xyz1 = (self.REF_FRAME*pose1).Pos()
-        xyz2 = (self.REF_FRAME*pose2).Pos()        
-        self.addline('N%02i G90 G102 X%.3f Y%.3f Z%.3f I1=%.3f J1=%.3f K1=%.3f' % (self.nId, xyz2[0], xyz2[1], xyz2[2], xyz1[0], xyz1[1], xyz1[2]))
-        #self.addline('N%02i G102 X%.3f Y%.3f Z%.3f I1=%.3f J1=%.3f K1=%.3f' % (self.nId, xyz1[0], xyz1[1], xyz1[2], xyz2[0]-xyz1[0], xyz2[1]-xyz1[1], xyz2[2]-xyz1[2]))		
+        robot_pose1 = self.FRAME*pose1*invH(self.TOOL)
+        robot_pose2 = self.FRAME*pose2*invH(self.TOOL)        
+        self.addline('dType.SetARCCmd(api, (%s), (%s),  isQueued=1)' %(pose_2_str(robot_pose1), pose_2_str(robot_pose2)))
         
     def setFrame(self, pose, frame_id=None, frame_name=None):
         """Change the robot reference frame"""
-        self.REF_FRAME = pose
-        self.addline('; Reference frame set to: ' + pose_2_str(pose))
-        self.addline(('; N%02i G90 G92 ' % self.nId) + pose_2_str(pose))
+        self.FRAME = pose
         
     def setTool(self, pose, tool_id=None, tool_name=None):
         """Change the robot TCP"""
-        self.nId = self.nId + 1
-        self.addline('; Tool frame set to: ' + pose_2_str(pose))
-        self.addline(('; N%02i G90 G92 ' % self.nId) + pose_2_str(pose))
-        pass
+        self.TOOL = pose
         
     def Pause(self, time_ms):
         """Pause the robot program"""
         if time_ms < 0:
-            self.addline('; PAUSE')
+            self.addline("dType.SetWAITCmd(api, 0.1, 1)")
+            mbox("Robot paused, press OK to continue")
         else:
-            self.addline('; WAIT %.3f' % (time_ms*0.001))
+            self.addline("dType.SetWAITCmd(api, %s, 1)" % (time_ms * 0.001))
     
     def setSpeed(self, speed_mms):
         """Changes the robot speed (in mm/s)"""
-        self.addline('F%.3f' % (speed_mms*60))
+        #self.addline("robot.Run('SetCartVel', %.3f)" % speed_mms)
+        pass
     
     def setAcceleration(self, accel_mmss):
         """Changes the robot acceleration (in mm/s2)"""
-        self.addlog('setAcceleration not defined')
+        self.addlog('Linear acceleration not supported')
     
     def setSpeedJoints(self, speed_degs):
         """Changes the robot joint speed (in deg/s)"""
-        self.addlog('setSpeedJoints not defined')
+        #self.addline("robot.Run('SetJointVel', %.3f)" % speed_degs)
+        pass
     
     def setAccelerationJoints(self, accel_degss):
         """Changes the robot joint acceleration (in deg/s2)"""
-        self.addlog('setAccelerationJoints not defined')
+        #self.addlog('Joint acceleration not supported')
+        pass
         
     def setZoneData(self, zone_mm):
-        """Changes the rounding radius (aka CNT, APO or zone data) to make the movement smoother"""
-        self.addlog('setZoneData not defined (%.1f mm)' % zone_mm)
+        """Changes the smoothing radius (aka CNT, APO or zone data) to make the movement smoother"""
+        #if zone_mm > 0:
+        #    self.addline("robot.Run('SetCornering', 1)")
+        #else:
+        #    self.addline("robot.Run('SetCornering', 0)")
+        pass
 
     def setDO(self, io_var, io_value):
         """Sets a variable (digital output) to a given value"""
@@ -207,7 +363,8 @@ class RobotPost(object):
                 io_value = 'FALSE'
 
         # at this point, io_var and io_value must be string values
-        self.addline('%s=%s' % (io_var, io_value))
+        # self.addline('%s=%s' % (io_var, io_value))
+        self.addlog('Digital IOs not managed by the robot (%s=%s)' % (io_var, io_value))
 
     def waitDI(self, io_var, io_value, timeout_ms=-1):
         """Waits for a variable (digital input) io_var to attain a given value io_value. Optionally, a timeout can be provided."""
@@ -221,9 +378,11 @@ class RobotPost(object):
 
         # at this point, io_var and io_value must be string values
         if timeout_ms < 0:
-            self.addline('WAIT FOR %s==%s' % (io_var, io_value))
+            #self.addline('WAIT FOR %s==%s' % (io_var, io_value))
+            self.addlog('Digital IOs not managed by the robot (WAIT FOR %s==%s)' % (io_var, io_value))
         else:
-            self.addline('WAIT FOR %s==%s TIMEOUT=%.1f' % (io_var, io_value, timeout_ms))
+            #self.addline('WAIT FOR %s==%s TIMEOUT=%.1f' % (io_var, io_value, timeout_ms))
+            self.addlog('Digital IOs not managed by the robot (WAIT FOR %s==%s)' % (io_var, io_value))
         
     def RunCode(self, code, is_function_call = False):
         """Adds code or a function call"""
@@ -238,14 +397,14 @@ class RobotPost(object):
     def RunMessage(self, message, iscomment = False):
         """Display a message in the robot controller screen (teach pendant)"""
         if iscomment:
-            self.addline('; ' + message)
+            self.addline('# ' + message)
         else:
-            self.addline('; Show message: %s' % message)
+            self.addline('print("%s")' % message)
         
 # ------------------ private ----------------------                
     def addline(self, newline):
         """Add a program line"""
-        self.PROG = self.PROG + newline + '\n'
+        self.PROG = self.PROG + self.TAB + newline + '\n'
         
     def addlog(self, newline):
         """Add a log message"""

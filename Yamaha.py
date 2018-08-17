@@ -37,7 +37,7 @@
 # ----------------------------------------------------
 # More information about RoboDK Post Processors and Offline Programming here:
 #     http://www.robodk.com/help#PostProcessor
-#     http://www.robodk.com/doc/PythonAPI/postprocessor.html
+#     http://www.robodk.com/doc/en/PythonAPI/postprocessor.html
 # ----------------------------------------------------
 
 # ----------------------------------------------------
@@ -48,7 +48,7 @@ from robodk import *
 def pose_2_str(pose):
     """Prints a pose target"""
     [x,y,z,r,p,w] = pose_2_xyzrpw(pose)
-    return ('%.3f,%.3f,%.3f,%.3f,%.3f,%.3f' % (x,y,z,r,p,w))
+    return ('%.3f %.3f %.3f %.3f %.3f %.3f' % (x,y,z,r,p,w))
     
 def angles_2_str(angles):
     """Prints a joint target"""
@@ -62,7 +62,7 @@ def angles_2_str(angles):
 # Object class that handles the robot instructions/syntax
 class RobotPost(object):
     """Robot post object"""
-    PROG_EXT = 'txt'        # set the program extension
+    PROG_EXT = 'prg'        # set the program extension
     
     # other variables
     ROBOT_POST = ''
@@ -85,16 +85,25 @@ class RobotPost(object):
         
     def ProgStart(self, progname):
         self.PROG_COUNT = self.PROG_COUNT + 1
-        self.addline('\' Program ' + progname)
+        
         if self.PROG_COUNT > 1:
-            self.addline('SUB *%s()' % progname)
-            self.TAB = '\t'
+            self.addline("'")
+            self.addline("'**********************************")
+            self.addline("'Sub Routine: %s " % progname)
+            self.addline("'**********************************")
+            #self.addline('SUB *%s:' % progname)
+            self.addline('*%s:' % progname)
+            #self.TAB = '\t'
+        else:
+            self.addline("'%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%")
+            self.addline('\' Main program: ' + progname)
         
     def ProgFinish(self, progname):
         self.addline('\' End program')
         if self.PROG_COUNT > 1:
-            self.TAB = ''
-            self.addline('END SUB')
+            #self.TAB = ''
+            #self.addline('END SUB')
+            self.addline('RETURN')
         else:
             self.addline('HALT')
         
@@ -120,6 +129,9 @@ class RobotPost(object):
                 # Open file with provided application
                 import subprocess
                 p = subprocess.Popen([show_result, filesave])   
+            elif type(show_result) is list:
+                import subprocess
+                p = subprocess.Popen(show_result + [filesave])   
             else:
                 # open file with default application
                 import os
@@ -221,9 +233,10 @@ class RobotPost(object):
         """Adds code or a function call"""
         if is_function_call:
             code.replace(' ','_')
-            if not code.endswith(')'):
-                code = code + '()'
-            self.addline('CALL *' + code)
+            #if not code.endswith(')'):
+                #code = code + '()'
+            #self.addline('CALL *' + code)
+            self.addline('GOSUB *' + code + "        ' Call sub routine: " + code)
         else:
             self.addline(code)
         

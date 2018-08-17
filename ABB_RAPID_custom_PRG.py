@@ -37,7 +37,7 @@
 # ----------------------------------------------------
 # More information about RoboDK Post Processors and Offline Programming here:
 #     http://www.robodk.com/help#PostProcessor
-#     http://www.robodk.com/doc/PythonAPI/postprocessor.html
+#     http://www.robodk.com/doc/en/PythonAPI/postprocessor.html
 # ----------------------------------------------------
 
 
@@ -65,7 +65,7 @@ CUSTOM_FUNCTIONS = '''
 def pose_2_str(pose):
     """Prints a pose target"""
     [x,y,z,q1,q2,q3,q4] = Pose_2_ABB(pose)
-    return ('[%.3f, %.3f, %.3f],[%.6f, %.6f, %.6f, %.6f]' % (x,y,z,q1,q2,q3,q4))
+    return ('[%.3f, %.3f, %.3f],[%.8f, %.8f, %.8f, %.8f]' % (x,y,z,q1,q2,q3,q4))
     
 def angles_2_str(angles):
     """Prints a joint target"""
@@ -110,7 +110,7 @@ class RobotPost(object):
     TAB = ''
     LOG = ''
     ZONEDATA = 'fine'
-    SPEEDDATA = 'v1000'
+    SPEEDDATA = '[500,500,5000,1000]'
     FRAME_NAME = 'rdkWObj'
     TOOL_NAME = 'rdkTool'
     
@@ -169,6 +169,9 @@ class RobotPost(object):
                 # Open file with provided application
                 import subprocess
                 p = subprocess.Popen([show_result, filesave])
+            elif type(show_result) is list:
+                import subprocess
+                p = subprocess.Popen(show_result + [filesave])
             else:
                 # open file with default application
                 import os
@@ -202,7 +205,27 @@ class RobotPost(object):
         
     def MoveC(self, pose1, joints1, pose2, joints2, conf_RLF_1=None, conf_RLF_2=None):
         """Add a circular movement"""
-        self.addlog('Circular move is not implemented')
+        target1 = ''
+        target2 = ''
+        if conf_RLF_1 is None:
+            conf_RLF_1 = [0,0,0]                
+        cf1_1 = math.floor(joints1[0]/90.0)
+        cf4_1 = math.floor(joints1[3]/90.0)
+        cf6_1 = math.floor(joints1[5]/90.0)
+        [REAR, LOWERARM, FLIP] = conf_RLF_1
+        cfx_1 = 4*REAR + 2*LOWERARM + FLIP
+        target1 = '[%s,[%i,%i,%i,%i],%s]' % (pose_2_str(pose1), cf1_1, cf4_1, cf6_1,cfx_1, extaxes_2_str(joints1))
+            
+        if conf_RLF_2 is None:
+            conf_RLF_2 = [0,0,0]
+        cf1_2 = math.floor(joints2[0]/90.0)
+        cf4_2 = math.floor(joints2[3]/90.0)
+        cf6_2 = math.floor(joints2[5]/90.0)
+        [REAR, LOWERARM, FLIP] = conf_RLF_2
+        cfx_2 = 4*REAR + 2*LOWERARM + FLIP
+        target2 = '[%s,[%i,%i,%i,%i],%s]' % (pose_2_str(pose2), cf1_2, cf4_2, cf6_2,cfx_2, extaxes_2_str(joints2))
+
+        self.addline('MoveC %s,%s,%s,%s,%s,\WObj:=%s;' % (target1, target2, self.SPEEDDATA, self.ZONEDATA, self.TOOL_NAME, self.FRAME_NAME))
         
     def setFrame(self, pose, frame_id=None, frame_name=None):
         """Change the robot reference frame"""
@@ -219,7 +242,7 @@ class RobotPost(object):
         #    tool_name = self.TOOL_NAME
         #tool_name = tool_name.replace(' ','_')
         #self.TOOL_NAME = tool_name
-        self.addline('%s := [TRUE,[%s],[20,[0,0,200],[1,0,0,0],0,0,0.005]];' % (self.TOOL_NAME, pose_2_str(pose)))
+        self.addline('%s := [TRUE,[%s],[1,[0,0,50],[1,0,0,0],0,0,0.005]];' % (self.TOOL_NAME, pose_2_str(pose)))
         
     def Pause(self, time_ms):
         """Pause the robot program"""
@@ -230,7 +253,8 @@ class RobotPost(object):
         
     def setSpeed(self, speed_mms):
         """Changes the robot speed (in mm/s)"""
-        self.SPEEDDATA = 'v%i' % speed_mms
+        #self.SPEEDDATA = 'v%i' % speed_mms
+        self.SPEEDDATA = '[%.2f,500,5000,1000]' % speed_mms
     
     def setAcceleration(self, accel_mmss):
         """Changes the robot acceleration (in mm/s2)"""
