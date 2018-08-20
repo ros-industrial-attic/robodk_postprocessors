@@ -37,7 +37,7 @@
 # ----------------------------------------------------
 # More information about RoboDK Post Processors and Offline Programming here:
 #     http://www.robodk.com/help#PostProcessor
-#     http://www.robodk.com/doc/PythonAPI/postprocessor.html
+#     http://www.robodk.com/doc/en/PythonAPI/postprocessor.html
 # ----------------------------------------------------
 
 
@@ -65,7 +65,7 @@ CUSTOM_FUNCTIONS = '''
 def pose_2_str(pose):
     """Prints a pose target"""
     [x,y,z,q1,q2,q3,q4] = Pose_2_ABB(pose)
-    return ('[%.3f, %.3f, %.3f],[%.6f, %.6f, %.6f, %.6f]' % (x,y,z,q1,q2,q3,q4))
+    return ('[%.3f, %.3f, %.3f],[%.8f, %.8f, %.8f, %.8f]' % (x,y,z,q1,q2,q3,q4))
     
 def angles_2_str(angles):
     """Prints a joint target"""
@@ -183,6 +183,9 @@ class RobotPost(object):
                 # Open file with provided application
                 import subprocess
                 p = subprocess.Popen([show_result, filesave])
+            elif type(show_result) is list:
+                import subprocess
+                p = subprocess.Popen(show_result + [filesave])   
             else:
                 # open file with default application
                 import os
@@ -348,7 +351,7 @@ class RobotPost(object):
         
     def setTool(self, pose, tool_id=None, tool_name=None):
         """Change the robot TCP"""
-        self.addline('rdkTool := [TRUE,[%s],[20,[0,0,200],[1,0,0,0],0,0,0.005]];' % pose_2_str(pose))
+        self.addline('rdkTool := [TRUE,[%s],[2,[0,0,15],[1,0,0,0],0,0,0.005]];' % pose_2_str(pose))
         
     def Pause(self, time_ms):
         """Pause the robot program"""

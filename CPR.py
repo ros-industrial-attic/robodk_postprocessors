@@ -10,7 +10,8 @@
 # limitations under the License.
 
 # ----------------------------------------------------
-# This file is a sample POST PROCESSOR script to generate robot programs for a B&R Automation controller
+# This file is a POST PROCESSOR for Robot Offline Programming to generate programs 
+# for a CPR robot (Common place robotics: http://www.cpr-robots.com/)
 #
 # To edit/test this POST PROCESSOR script file:
 # Select "Program"->"Add/Edit Post Processor", then select your post or create a new one.
@@ -43,26 +44,21 @@
 # ----------------------------------------------------
 # Import RoboDK tools
 from robodk import *
+from robolink import *
 
-JOINT_DATA = ['Q1','Q2','Q3','Q4','Q5','Q6','Ra','Rb','Rc']
 
 # ----------------------------------------------------
-def pose_2_str(pose, joints = None):
+def pose_2_str(pose):
     """Prints a pose target"""
-    [x,y,z,r,p,w] = Pose_2_KUKA(pose)        
-    str_xyzwpr = 'X %.3f Y %.3f Z %.3f A %.3f B %.3f C %.3f' % (x,y,z,r,p,w)
-    if joints is not None:        
-        if len(joints) > 6:
-            for j in range(6,len(joints)):
-                str_xyzwpr += (' %s %.6f ' % (JOINT_DATA[j], joints[j]))
-    
-    return str_xyzwpr
+    [x,y,z,r,p,w] = Pose_2_KUKA(pose)
+    return ('x="%.3f" y="%.3f" z="%.3f" a="%.3f" b"%.3f" c="%.3f"' % (x,y,z,r,p,w))
     
 def joints_2_str(joints):
     """Prints a joint target"""
     str = ''
+    jnt_tags = ['a1', 'a2', 'a3', 'a4', 'a5', 'a6', 'a7', 'a8']
     for i in range(len(joints)):
-        str = str + ('%s %.6f ' % (JOINT_DATA[i], joints[i]))
+        str = str + ('%s="%.5f" ' % (jnt_tags[i], joints[i]))
     str = str[:-1]
     return str
 
@@ -70,18 +66,25 @@ def joints_2_str(joints):
 # Object class that handles the robot instructions/syntax
 class RobotPost(object):
     """Robot post object"""
-    PROG_EXT = 'cnc'        # set the program extension
+    PROG_EXT = 'xml'        # set the program extension    
     
     # other variables
     ROBOT_POST = ''
     ROBOT_NAME = ''
-    PROG_FILES = []
+    PROG_FILES = []    
     
     PROG = ''
     LOG = ''
+    TAB = ''
+    MAIN_PROG_NAME = None
     nAxes = 6
-    nId = 0
-    REF_FRAME = eye(4)
+    Prog_count = 0
+    SMOOTH = 'True'
+    SPEED = 70
+    SPEED_PERCENT = 35
+    NR_ID = 0
+    FRAME = eye(4)
+    TOOL = eye(4)
 
     
     def __init__(self, robotpost=None, robotname=None, robot_axes = 6, **kwargs):
@@ -92,15 +95,27 @@ class RobotPost(object):
         self.nAxes = robot_axes
         
     def ProgStart(self, progname):
-        self.addline('; program: %s()' % progname)
-        self.addline('G161')
-        self.addline('G90')
-        self.addline('F15000')        
+        self.Prog_count = self.Prog_count + 1
+        self.addline('<?xml version="1.0" encoding="utf-8"?>')
+        self.addline('<!-- values in mm and degree -->')
+        self.addline('<Program>')
+        self.addline('<Header ProgramName ="CPRog recording" Author="nn" SetUpDate=""  LastChangeDate="" Kinematic="CPRFour"/>')
+        self.TAB = '    '        
+        if self.MAIN_PROG_NAME is None:        
+            self.MAIN_PROG_NAME = progname            
+        else:
+            pass
         
     def ProgFinish(self, progname):
-        self.addline('; ENDPROC')
+        self.TAB = ''
+        self.addline('</Program>')
+        self.addline('<!-- End of program: %s -->' % progname)
+        self.addline('')
+        if self.Prog_count == 1:
+            pass      
         
     def ProgSave(self, folder, progname, ask_user=False, show_result=False):
+        import subprocess
         progname = progname + '.' + self.PROG_EXT
         if ask_user or not DirExists(folder):
             filesave = getSaveFile(folder, progname, 'Save program as...')
@@ -110,13 +125,22 @@ class RobotPost(object):
                 return
         else:
             filesave = folder + '/' + progname
+        
+        # retrieve robot IP
+        RDK = Robolink()
+        robot = RDK.Item(self.ROBOT_NAME, ITEM_TYPE_ROBOT)
+        [server_ip, port, remote_path, username, password] = robot.ConnectionParams()            
+            
         fid = open(filesave, "w")
-        fid.write(self.PROG)
-        fid.close()
+        fid.write(self.PROG)        
         print('SAVED: %s\n' % filesave)
         self.PROG_FILES = filesave
         #---------------------- show result
-        if show_result:
+        
+        #selection_view = mbox('Do you want to view/edit the program or run it on the robot?', 'View', 'Run')            
+        selection_view = True
+        
+        if selection_view and show_result:
             if type(show_result) is str:
                 # Open file with provided application
                 import subprocess
@@ -128,103 +152,147 @@ class RobotPost(object):
                 # open file with default application
                 import os
                 os.startfile(filesave)  
-            
+
             if len(self.LOG) > 0:
                 mbox('Program generation LOG:\n\n' + self.LOG)
-    
+        
+        if not selection_view:
+            RDK.ShowMessage('Running program...', False)
+            proc = subprocess.Popen(['python', filesave])
+            
+            # Using the same pipe
+            #import io
+            #proc = subprocess.Popen(['python', filesave], stdout=subprocess.PIPE)
+            #for line in io.TextIOWrapper(proc.stdout, encoding="utf-8"):  # or another encoding
+            #    RDK.ShowMessage(line, False)
+        
+        
     def ProgSendRobot(self, robot_ip, remote_path, ftp_user, ftp_pass):
         """Send a program to the robot using the provided parameters. This method is executed right after ProgSave if we selected the option "Send Program to Robot".
         The connection parameters must be provided in the robot connection menu of RoboDK"""
-        UploadFTP(self.PROG_FILES, robot_ip, remote_path, ftp_user, ftp_pass)
+        import subprocess
+        import os
+        import sys
+        import time
+        
+        print("POPUP: Starting process...")     
+        print("Python path " + PATH_PYTHON)
+        print("Program file: " + self.PROG_FILES)
+        sys.stdout.flush()
+        
+        # Start process
+        cmd_run = self.PROG_FILES # run py file itself
+        if PATH_PYTHON != '':
+            # if a python path is specified, use it to run the Py file
+            cmd_run = [PATH_PYTHON, self.PROG_FILES]
+            
+        process = subprocess.Popen(cmd_run, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
+        
+        # Poll process for new output until finished
+        for stdout_line in iter(process.stdout.readline, ""):
+            print("POPUP: " + stdout_line.strip())
+            sys.stdout.flush()
+            
+        process.stdout.close()
+        return_code = process.wait()
+        if return_code:
+            raise subprocess.CalledProcessError(return_code, cmd_run)
+
+        if (return_code == 0):
+            return
+        else:
+            raise ProcessException(command, return_code, output)
         
     def MoveJ(self, pose, joints, conf_RLF=None):
         """Add a joint movement"""
-        self.nId = self.nId + 1
-        self.addline('N%02i G101 ' % self.nId + joints_2_str(joints))
-        
+        self.NR_ID = self.NR_ID + 1
+        self.addline('<Joint Nr="%i" %s velPercent="%.0f" acc="40" smooth="%s" Descr="" />' % (self.NR_ID, joints_2_str(joints), self.SPEED_PERCENT, self.SMOOTH))
+
     def MoveL(self, pose, joints, conf_RLF=None):
         """Add a linear movement"""
-        self.nId = self.nId + 1
-        self.addline('N%02i G1 ' % self.nId + pose_2_str(self.REF_FRAME*pose, joints))
-        #self.addline('N%02i G90 G1 ' % self.nId + joints_2_str(joints))
+        self.NR_ID = self.NR_ID + 1
+        if pose is None:
+            # no linear movement allowed by providing joints
+            self.addline('<Joint Nr="%i" %s velPercent="%.0f" acc="40" smooth="%s" Descr="" />' % (self.NR_ID, joints_2_str(joints), self.SPEED_PERCENT, self.SMOOTH))
+        else:
+            self.addline('<Joint Nr="%i" %s vel="%.0f" acc="40" smooth="%s" Descr="" />' % (self.NR_ID, pose_2_str(self.FRAME*pose*invH(self.TOOL)), self.SPEED, self.SMOOTH))
         
     def MoveC(self, pose1, joints1, pose2, joints2, conf_RLF_1=None, conf_RLF_2=None):
         """Add a circular movement"""
-        self.nId = self.nId + 1
-        xyz1 = (self.REF_FRAME*pose1).Pos()
-        xyz2 = (self.REF_FRAME*pose2).Pos()        
-        self.addline('N%02i G90 G102 X%.3f Y%.3f Z%.3f I1=%.3f J1=%.3f K1=%.3f' % (self.nId, xyz2[0], xyz2[1], xyz2[2], xyz1[0], xyz1[1], xyz1[2]))
-        #self.addline('N%02i G102 X%.3f Y%.3f Z%.3f I1=%.3f J1=%.3f K1=%.3f' % (self.nId, xyz1[0], xyz1[1], xyz1[2], xyz2[0]-xyz1[0], xyz2[1]-xyz1[1], xyz2[2]-xyz1[2]))		
+        self.addlog("Cicular moves not supported")
         
     def setFrame(self, pose, frame_id=None, frame_name=None):
         """Change the robot reference frame"""
-        self.REF_FRAME = pose
-        self.addline('; Reference frame set to: ' + pose_2_str(pose))
-        self.addline(('; N%02i G90 G92 ' % self.nId) + pose_2_str(pose))
+        self.FRAME = pose
+        self.addline("<!-- Using Reference: %s -->" % pose_2_str(pose))
         
     def setTool(self, pose, tool_id=None, tool_name=None):
         """Change the robot TCP"""
-        self.nId = self.nId + 1
-        self.addline('; Tool frame set to: ' + pose_2_str(pose))
-        self.addline(('; N%02i G90 G92 ' % self.nId) + pose_2_str(pose))
-        pass
+        self.TOOL = pose
+        self.addline("<!-- Using Tool: %s -->" % pose_2_str(pose))
         
     def Pause(self, time_ms):
         """Pause the robot program"""
+        self.NR_ID = self.NR_ID + 1
         if time_ms < 0:
-            self.addline('; PAUSE')
+            self.addline('<Wait Nr="%i" Seconds="%.3f" Descr="" />' % (self.NR_ID, float(9999)))
         else:
-            self.addline('; WAIT %.3f' % (time_ms*0.001))
+            #self.addline('time.sleep(%.3f)' % (float(time_ms)*0.001))
+            self.addline('<Wait Nr="%i" Seconds="%.3f" Descr="" />' % (self.NR_ID, float(time_ms)*0.001))
     
     def setSpeed(self, speed_mms):
         """Changes the robot speed (in mm/s)"""
-        self.addline('F%.3f' % (speed_mms*60))
-    
+        self.SPEED_PERCENT = speed_mms
+        
     def setAcceleration(self, accel_mmss):
         """Changes the robot acceleration (in mm/s2)"""
-        self.addlog('setAcceleration not defined')
+        self.addlog('Linear acceleration not supported')
     
     def setSpeedJoints(self, speed_degs):
         """Changes the robot joint speed (in deg/s)"""
-        self.addlog('setSpeedJoints not defined')
+        self.SPEED_PERCENT = min(speed_degs, 100)
     
     def setAccelerationJoints(self, accel_degss):
         """Changes the robot joint acceleration (in deg/s2)"""
-        self.addlog('setAccelerationJoints not defined')
+        self.addlog('Joint acceleration not supported')
         
     def setZoneData(self, zone_mm):
-        """Changes the rounding radius (aka CNT, APO or zone data) to make the movement smoother"""
-        self.addlog('setZoneData not defined (%.1f mm)' % zone_mm)
+        """Changes the smoothing radius (aka CNT, APO or zone data) to make the movement smoother"""
+        if zone_mm > 0:
+            self.SMOOTH = 'True'
+        else:
+            self.SMOOTH = 'False'
 
     def setDO(self, io_var, io_value):
         """Sets a variable (digital output) to a given value"""
         if type(io_var) != str:  # set default variable name if io_var is a number
-            io_var = 'OUT[%s]' % str(io_var)
+            io_var = '%s' % str(io_var)
         if type(io_value) != str: # set default variable value if io_value is a number
             if io_value > 0:
-                io_value = 'TRUE'
+                io_value = 'True'
             else:
-                io_value = 'FALSE'
+                io_value = 'False'
 
+        self.NR_ID = self.NR_ID + 1
         # at this point, io_var and io_value must be string values
-        self.addline('%s=%s' % (io_var, io_value))
-
+        # self.addline('%s=%s' % (io_var, io_value))
+        self.addline('<Output Nr="%i" Local="True" DIO="%s" State="%s" Descr="" />' % (self.NR_ID, io_var, io_value))
+        
     def waitDI(self, io_var, io_value, timeout_ms=-1):
         """Waits for a variable (digital input) io_var to attain a given value io_value. Optionally, a timeout can be provided."""
         if type(io_var) != str:  # set default variable name if io_var is a number
-            io_var = 'IN[%s]' % str(io_var)
+            io_var = '%s' % str(io_var)
         if type(io_value) != str: # set default variable value if io_value is a number
             if io_value > 0:
-                io_value = 'TRUE'
+                io_value = 'True'
             else:
-                io_value = 'FALSE'
+                io_value = 'False'
 
+        self.NR_ID = self.NR_ID + 1
         # at this point, io_var and io_value must be string values
-        if timeout_ms < 0:
-            self.addline('WAIT FOR %s==%s' % (io_var, io_value))
-        else:
-            self.addline('WAIT FOR %s==%s TIMEOUT=%.1f' % (io_var, io_value, timeout_ms))
+        self.addline('<WaitInput Nr="%i" Local="True" DIO="%s" State="%s" Descr="" />' % (self.NR_ID, io_var, io_value))
         
+    
     def RunCode(self, code, is_function_call = False):
         """Adds code or a function call"""
         if is_function_call:
@@ -238,14 +306,14 @@ class RobotPost(object):
     def RunMessage(self, message, iscomment = False):
         """Display a message in the robot controller screen (teach pendant)"""
         if iscomment:
-            self.addline('; ' + message)
+            self.addline('<!-- %s -->' % message)
         else:
-            self.addline('; Show message: %s' % message)
+            self.addline('<!-- %s -->' % message)
         
 # ------------------ private ----------------------                
     def addline(self, newline):
         """Add a program line"""
-        self.PROG = self.PROG + newline + '\n'
+        self.PROG = self.PROG + self.TAB + newline + '\n'
         
     def addlog(self, newline):
         """Add a log message"""

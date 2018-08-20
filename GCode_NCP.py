@@ -44,25 +44,18 @@
 # Import RoboDK tools
 from robodk import *
 
-JOINT_DATA = ['Q1','Q2','Q3','Q4','Q5','Q6','Ra','Rb','Rc']
-
 # ----------------------------------------------------
-def pose_2_str(pose, joints = None):
+def pose_2_str(pose):
     """Prints a pose target"""
-    [x,y,z,r,p,w] = Pose_2_KUKA(pose)        
-    str_xyzwpr = 'X %.3f Y %.3f Z %.3f A %.3f B %.3f C %.3f' % (x,y,z,r,p,w)
-    if joints is not None:        
-        if len(joints) > 6:
-            for j in range(6,len(joints)):
-                str_xyzwpr += (' %s %.6f ' % (JOINT_DATA[j], joints[j]))
-    
-    return str_xyzwpr
+    [x,y,z,r,p,w] = Pose_2_KUKA(pose)
+    return ('X=%.3f Y=%.3f Z=%.3f A=%.3f B=%.3f C=%.3f' % (x,y,z,r,p,w))
     
 def joints_2_str(joints):
     """Prints a joint target"""
     str = ''
+    data = ['Q1','Q2','Q3','Q4','Q5','Q6','G','H','I','J','K','L']
     for i in range(len(joints)):
-        str = str + ('%s %.6f ' % (JOINT_DATA[i], joints[i]))
+        str = str + ('%s=%.6f ' % (data[i], joints[i]))
     str = str[:-1]
     return str
 
@@ -92,13 +85,14 @@ class RobotPost(object):
         self.nAxes = robot_axes
         
     def ProgStart(self, progname):
-        self.addline('; program: %s()' % progname)
-        self.addline('G161')
-        self.addline('G90')
-        self.addline('F15000')        
+        self.addline('; Program %s' % progname)
+        self.nId = self.nId + 1
+        self.addline('N%05i F15000 ; Set default speed' % self.nId)
         
     def ProgFinish(self, progname):
-        self.addline('; ENDPROC')
+        self.addline('; End of program: %s' % progname)
+        self.nId = self.nId + 1
+        self.addline('N%05i M30' % self.nId)
         
     def ProgSave(self, folder, progname, ask_user=False, show_result=False):
         progname = progname + '.' + self.PROG_EXT
@@ -140,41 +134,45 @@ class RobotPost(object):
     def MoveJ(self, pose, joints, conf_RLF=None):
         """Add a joint movement"""
         self.nId = self.nId + 1
-        self.addline('N%02i G101 ' % self.nId + joints_2_str(joints))
+        self.addline('N%05i G00 ' % self.nId + joints_2_str(joints))
         
     def MoveL(self, pose, joints, conf_RLF=None):
         """Add a linear movement"""
         self.nId = self.nId + 1
-        self.addline('N%02i G1 ' % self.nId + pose_2_str(self.REF_FRAME*pose, joints))
-        #self.addline('N%02i G90 G1 ' % self.nId + joints_2_str(joints))
+        self.addline('N%05i G07 ' % self.nId + pose_2_str(self.REF_FRAME*pose))
+        #self.addline('N%05i G90 G1 ' % self.nId + joints_2_str(joints))
         
     def MoveC(self, pose1, joints1, pose2, joints2, conf_RLF_1=None, conf_RLF_2=None):
         """Add a circular movement"""
         self.nId = self.nId + 1
         xyz1 = (self.REF_FRAME*pose1).Pos()
         xyz2 = (self.REF_FRAME*pose2).Pos()        
-        self.addline('N%02i G90 G102 X%.3f Y%.3f Z%.3f I1=%.3f J1=%.3f K1=%.3f' % (self.nId, xyz2[0], xyz2[1], xyz2[2], xyz1[0], xyz1[1], xyz1[2]))
+        self.addline('N%05i G02 X=%.3f Y=%.3f Z=%.3f I1=%.3f J1=%.3f K1=%.3f' % (self.nId, xyz2[0], xyz2[1], xyz2[2], xyz1[0], xyz1[1], xyz1[2]))
         #self.addline('N%02i G102 X%.3f Y%.3f Z%.3f I1=%.3f J1=%.3f K1=%.3f' % (self.nId, xyz1[0], xyz1[1], xyz1[2], xyz2[0]-xyz1[0], xyz2[1]-xyz1[1], xyz2[2]-xyz1[2]))		
         
     def setFrame(self, pose, frame_id=None, frame_name=None):
         """Change the robot reference frame"""
         self.REF_FRAME = pose
-        self.addline('; Reference frame set to: ' + pose_2_str(pose))
-        self.addline(('; N%02i G90 G92 ' % self.nId) + pose_2_str(pose))
+        self.nId = self.nId + 1
+        self.addline('; Using reference frame: ' + pose_2_str(pose))
+        #self.addline(('%% N%05i G90 G92 ' % self.nId) + pose_2_str(pose))
         
     def setTool(self, pose, tool_id=None, tool_name=None):
-        """Change the robot TCP"""
+        """Change the robot TCP"""        
+        self.addline('; Tool frame set to: ' + tool_name)
+        self.addline('; ' + pose_2_str(pose))
         self.nId = self.nId + 1
-        self.addline('; Tool frame set to: ' + pose_2_str(pose))
-        self.addline(('; N%02i G90 G92 ' % self.nId) + pose_2_str(pose))
-        pass
+        self.addline('N%05i M72 T=' % self.nId + str(tool_id))
+        self.nId = self.nId + 1
+        self.addline('; N%05i M108 T=...   ; Set Drillbit typenumber (not implemented)' % self.nId)
         
     def Pause(self, time_ms):
         """Pause the robot program"""
+        self.nId = self.nId + 1
         if time_ms < 0:
-            self.addline('; PAUSE')
+            self.addline('N%05i M00 ; Machine halt' % self.nId)
         else:
-            self.addline('; WAIT %.3f' % (time_ms*0.001))
+            self.addline('N%05i M00 ; pause %.3f seconds' % (self.nId, time_ms*0.001))
     
     def setSpeed(self, speed_mms):
         """Changes the robot speed (in mm/s)"""
@@ -227,25 +225,29 @@ class RobotPost(object):
         
     def RunCode(self, code, is_function_call = False):
         """Adds code or a function call"""
+        self.nId = self.nId + 1
         if is_function_call:
             code.replace(' ','_')
             if not code.endswith(')'):
                 code = code + '()'
-            self.addline(code)
+            #self.addline(code)
+            self.addline('N%05i %s' % (self.nId, code))
         else:
-            self.addline(code)
+            self.addline('N%05i %s' % (self.nId, code))
         
     def RunMessage(self, message, iscomment = False):
         """Display a message in the robot controller screen (teach pendant)"""
         if iscomment:
             self.addline('; ' + message)
         else:
-            self.addline('; Show message: %s' % message)
+            self.addline('//(-------------------------------------------------------)')
+            self.addline('//(%s)' % message)
+            self.addline('//(-------------------------------------------------------)')
         
 # ------------------ private ----------------------                
     def addline(self, newline):
         """Add a program line"""
-        self.PROG = self.PROG + newline + '\n'
+        self.PROG = self.PROG + newline + '\r\n'
         
     def addlog(self, newline):
         """Add a log message"""
@@ -274,7 +276,7 @@ def test_post():
     robot.ProgStart("Program")
     robot.RunMessage("Program generated by RoboDK using a custom post processor", True)
     robot.setFrame(Pose([807.766544, -963.699898, 41.478944, 0, 0, 0]))
-    robot.setTool(Pose([62.5, -108.253175, 100, -60, 90, 0]))
+    robot.setTool(Pose([62.5, -108.253175, 100, -60, 90, 0]), 1, 'tool 1')
     robot.MoveJ(Pose([200, 200, 500, 180, 0, 180]), [-46.18419, -6.77518, -20.54925, 71.38674, 49.58727, -302.54752] )
     robot.MoveL(Pose([200, 250, 348.734575, 180, 0, -150]), [-41.62707, -8.89064, -30.01809, 60.62329, 49.66749, -258.98418] )
     robot.MoveL(Pose([200, 200, 262.132034, 180, 0, -150]), [-43.73892, -3.91728, -35.77935, 58.57566, 54.11615, -253.81122] )

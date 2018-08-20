@@ -345,6 +345,18 @@ class RobotPost(object):
     PROG_FILES = []
     MAIN_PROGNAME = 'unknown'
     
+    # 3D Printing Extruder Setup Parameters:
+    PRINT_E_AO = 5 # Analog Output ID to command the extruder flow
+    PRINT_FLOW_2_SIGNAL = 0.05 # Ratio to convert the flow to an analog signal
+    PRINT_FLOW_MAX_SIGNAL = 24 # Maximum signal to provide to the Extruder
+    PRINT_ACCEL_MMSS = 1e9 # Acceleration (assume constant speed if we use rounding/blending)    
+    
+    # Internal 3D Printing Parameters
+    PRINT_POSE_LAST = None # Last pose printed
+    PRINT_E_LAST = 0 # Last Extruder length
+    PRINT_E_NEW = 0 # New Extruder Length
+    
+    
     nPROGS = 0
     PROG = []
     PROG_LIST = []
@@ -571,12 +583,54 @@ class RobotPost(object):
             self.RunMessage('Move axes to: ' + angles_2_str(joints))
         else:
             self.addline('movej(%s,accel_radss,speed_rads,0,%s)' % (angles_2_str(joints), blend_radius))
+    
+    def new_move(self, pose2):
+        '''Output the Extruder signal to have a constant flow 
+        given the amount of material that needs to be extruded, 
+        the distance between the 2 points and the robot speed'''
+        if self.PRINT_POSE_LAST is None:
+            self.PRINT_POSE_LAST = pose2
+            return
+           
+        def Calculate_Time(Dist, Vmax, Amax):
+            '''Calculate the time to move Dist with Amax acceleration and Vmax speed'''
+            tacc = Vmax/Amax;
+            Xacc = 0.5*Amax*tacc*tacc;
+            if Dist <= 2*Xacc:
+                # Vmax is not reached
+                tacc = sqrt(Dist/Amax)
+                Ttot = tacc*2
+            else:
+                # Vmax is reached
+                Xvmax = Dist - 2*Xacc
+                Tvmax = Xvmax/Vmax
+                Ttot = 2*tacc + Tvmax
+            return Ttot
+           
+        add_material = self.PRINT_E_NEW - self.PRINT_E_LAST
+        self.PRINT_E_LAST = self.PRINT_E_NEW
+            
+        if add_material > 0:
+            distance_mm = norm(subs3(self.PRINT_POSE_LAST.Pos(), pose2.Pos()))
+            # calculate movement time in seconds
+            time_s = Calculate_Time(distance_mm, self.SPEED_MMS, self.PRINT_ACCEL_MMSS)
+            # add material
+            signal = min(self.PRINT_FLOW_MAX_SIGNAL , self.PRINT_FLOW_2_SIGNAL * add_material/time_s)
+            self.setDO(self.PRINT_E_AO,"%.3f" % (signal))
+        else:
+            # DO not add material
+            self.setDO(self.PRINT_E_AO,"0")
         
+        # Remember the last position
+        self.PRINT_POSE_LAST = pose2            
+            
     def MoveL(self, pose, joints, conf_RLF=None):
         """Add a linear movement"""
         # Movement in joint space or Cartesian space should give the same result:
         # pose_wrt_base = self.REF_FRAME*pose
         # self.addline('movel(%s,accel_mss,speed_ms,0,blend_radius_m)' % (pose_2_str(pose_wrt_base)))
+        self.new_move(pose) # used for 3D printing
+        
         if pose is None:
             blend_radius = "0"
             self.LAST_POS = None
@@ -644,7 +698,8 @@ class RobotPost(object):
         #    self.USE_MOVEP = True
         #else:
         #    self.USE_MOVEP = False
-        self.SPEED_MS = speed_mms/1000.0
+        self.SPEED_MMS = speed_mms
+        self.SPEED_MS = speed_mms/1000.0        
         self.addline('speed_ms    = %.3f' % self.SPEED_MS)
         
     def setAcceleration(self, accel_mmss):
@@ -704,6 +759,15 @@ class RobotPost(object):
         """Adds code or a function call"""
         if is_function_call:
             code = get_safe_name(code)
+            if code.startswith("Extruder("):
+                # Intercept the extruder command.
+                # if the program call is Extruder(123.56)
+                # we extract the number as a string
+                # and convert it to a number
+                self.PRINT_E_NEW = float(code[9:-1])
+                # Skip the program call generation
+                return
+                
             if code.lower() == "usemovel":
                 self.USE_MOVEP = False
                 return

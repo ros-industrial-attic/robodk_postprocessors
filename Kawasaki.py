@@ -37,7 +37,7 @@
 # ----------------------------------------------------
 # More information about RoboDK Post Processors and Offline Programming here:
 #     http://www.robodk.com/help#PostProcessor
-#     http://www.robodk.com/doc/PythonAPI/postprocessor.html
+#     http://www.robodk.com/doc/en/PythonAPI/postprocessor.html
 # ----------------------------------------------------
 
 
@@ -51,7 +51,8 @@ def pose_2_str(pose,joints=None,reference=None):
     if reference is not None:
         pose = reference*pose
     [x,y,z,w,p,r] = Pose_2_Adept(pose)
-    return ('[%.3f,%.3f,%.3f,%.4f,%.4f,%.4f]' % (x,y,z,w,p,r))
+    #return ('[%.3f,%.3f,%.3f,%.4f,%.4f,%.4f]' % (x,y,z,w,p,r))
+    return ('TRANS(%.3f,%.3f,%.3f,%.4f,%.4f,%.4f)' % (x,y,z,w,p,r))
     
 def joints_2_str(joints):
     """Contverts a joint target to a string"""
@@ -111,6 +112,9 @@ class RobotPost(object):
                 # Open file with provided application
                 import subprocess
                 p = subprocess.Popen([show_result, filesave])
+            elif type(show_result) is list:
+                import subprocess
+                p = subprocess.Popen(show_result + [filesave])   
             else:
                 # open file with default application
                 import os
@@ -133,8 +137,8 @@ class RobotPost(object):
         
     def MoveC(self, pose1, joints1, pose2, joints2, conf_RLF_1=None, conf_RLF_2=None):
         """Add a circular movement"""
-        self.addline('C1MOVE ' + pose_2_str(pose1,joints))
-        self.addline('C2MOVE ' + pose_2_str(pose2,joints))
+        self.addline('C1MOVE ' + pose_2_str(pose1,joints1))
+        self.addline('C2MOVE ' + pose_2_str(pose2,joints2))
         
     def setFrame(self, pose, frame_id=None, frame_name=None):
         """Change the robot reference frame"""
@@ -147,7 +151,7 @@ class RobotPost(object):
     def Pause(self, time_ms):
         """Pause the robot program"""
         if time_ms <= 0:
-            self.addline('STOP')
+            self.addline('PAUSE')
         else:
             self.addline('TWAIT %.3f' % (time_ms*0.001))
     

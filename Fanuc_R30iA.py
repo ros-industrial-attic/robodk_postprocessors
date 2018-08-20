@@ -37,40 +37,72 @@
 # ----------------------------------------------------
 # More information about RoboDK Post Processors and Offline Programming here:
 #     http://www.robodk.com/help#PostProcessor
-#     http://www.robodk.com/doc/PythonAPI/postprocessor.html
+#     http://www.robodk.com/doc/en/PythonAPI/postprocessor.html
 # ----------------------------------------------------
+
+
+def get_safe_name(progname, max_chars = 10):
+    """Get a safe program name"""
+    # Remove special characters
+    for c in r'-[]/\;,><&*:%=+@!#^()|?^':
+        progname = progname.replace(c,'')
+    # Set a program name by default:
+    if len(progname) <= 0:
+        progname = 'Program'
+    # Force the program to start with a letter (not a number)
+    if progname[0].isdigit():
+        progname = 'P' + progname
+    # Set the maximum size of a program (number of characters)
+    if len(progname) > max_chars:
+        progname = progname[:max_chars]
+    return progname
 
 
 # ----------------------------------------------------
 # Import RoboDK tools
 from robodk import *
+import sys
 
 # ----------------------------------------------------    
 # Object class that handles the robot instructions/syntax
 class RobotPost(object):
     """Robot post object defined for Fanuc robots"""
-    PROG_EXT = 'LS'        # set the program extension
-    JOINT_SPEED = '20%'     # set joint speed motion (first pose)
-    SPEED = '500mm/sec'     # set cartesian speed motion (approach pose)    
-    CNT_VALUE = 'FINE'      # set CNT value (all motion until smooth value is changed)
+    PROG_EXT = 'LS'             # set the program extension
+    MAX_LINES_X_PROG = 9999    # maximum number of lines per program. It will then generate multiple "pages (files)". This can be overriden by RoboDK settings.
+    INCLUDE_SUB_PROGRAMS = True # Generate sub programs
+    JOINT_SPEED = '20%'     # set default joint speed motion
+    SPEED = '500mm/sec'     # set default cartesian speed motion  
+    CNT_VALUE = 'FINE'      # set default CNT value (all motion until smooth value is changed)
     ACTIVE_UF = 9           # Active UFrame Id (register)
     ACTIVE_UT = 9           # Active UTool Id (register)
     SPARE_PR = 9            # Spare Position register for calculations
+
+    # PROG specific variables:
+    LINE_COUNT = 0 # Count the number of instructions (limited by MAX_LINES_X_PROG)
+    P_COUNT = 0   # Count the number of P targets in one file
+    nProgs = 0    # Count the number of programs and sub programs
+    LBL_ID_COUNT = 0  # Number of labels used
     
     # other variables
     ROBOT_POST = ''
     ROBOT_NAME = ''
-    PROG_FILES = []
+    PROG_FILES = [] # List of Program files to be uploaded through FTP
     
-    nAxes = 6
-    LINE_COUNT = 0
-    P_COUNT = 0
-    nPROGS = 0
-    PROG = ''
-    PROG_TARGETS = ''
-    LOG = ''
-    LBL_ID_COUNT = 0
-    AXES_TYPE = ['R','R','R','R','R','R']
+    PROG_NAMES = [] # List of PROG NAMES
+    PROG_LIST = [] # List of PROG 
+    
+    PROG_NAME = 'unknown'  # Original name of the current program (example: ProgA)
+    PROG_NAME_CURRENT = 'unknown' # Auto generated name (different from PROG_NAME if we have more than 1 page per program. Example: ProgA2)
+    
+    nPages = 0           # Count the number of pages
+    PROG_NAMES_MAIN = [] # List of programs called by a main program due to splitting
+    
+    PROG = []     # Save the program lines
+    PROG_TARGETS = []  # Save the program lines (targets section)
+    LOG = '' # Save a log
+    
+    nAxes = 6 # Important: This is usually provided by RoboDK automatically. Otherwise, override the __init__ procedure. 
+    AXES_TYPE = ['R','R','R','R','R','R']  # Important: This is usually set up by RoboDK automatically. Otherwise, override the __init__ procedure.
     # 'R' for rotative axis, 'L' for linear axis, 'T' for external linear axis (linear track), 'J' for external rotative axis (turntable)
     #AXES_TYPE = ['R','R','R','R','R','R','T','J','J'] #example of a robot with one external linear track axis and a turntable with 2 rotary axes
     AXES_TRACK = []
@@ -78,15 +110,20 @@ class RobotPost(object):
     HAS_TRACK = False
     HAS_TURNTABLE = False
     
+    # Specific to ARC welding applications
+    SPEED_BACKUP = None
+    LAST_POSE = None
     
     def __init__(self, robotpost=None, robotname=None, robot_axes = 6, **kwargs):
         self.ROBOT_POST = robotpost
         self.ROBOT_NAME = robotname
         self.nAxes = robot_axes
-        self.PROG = ''
+        self.PROG = []
         self.LOG = ''
         #for k,v in kwargs.iteritems(): # python2
         for k,v in kwargs.items():
+            if k == 'lines_x_prog':
+                self.MAX_LINES_X_PROG = v
             if k == 'axes_type':
                 self.AXES_TYPE = v                
         
@@ -97,16 +134,45 @@ class RobotPost(object):
             elif self.AXES_TYPE[i] == 'J':
                 self.AXES_TURNTABLE.append(i)
                 self.HAS_TURNTABLE = True        
+                
+    def ProgStart(self, progname, new_page = False):
+        progname = get_safe_name(progname)
+        progname_i = progname
+        if new_page:
+            #nPages = len(self.PROG_LIST)
+            if self.nPages == 0:
+                if len(self.PROG_NAMES_MAIN) > 0:
+                    print("Can't split %s: Two or more programs are split into smaller programs" % progname)
+                    print(self.PROG_NAMES_MAIN)
+                    raise Exception("Only one program at a time can be split into smaller programs")
+                self.PROG_NAMES_MAIN.append(self.PROG_NAME) # add the first program in the list to be genrated as a subprogram call
+                self.nPages = self.nPages + 1
+
+            self.nPages = self.nPages + 1
+            progname_i = "%s%i" % (self.PROG_NAME, self.nPages)          
+            self.PROG_NAMES_MAIN.append(progname_i)
+            
+        else:
+            if self.nProgs > 1 and not self.INCLUDE_SUB_PROGRAMS:
+                return
+            self.PROG_NAME = progname
+            self.nProgs = self.nProgs + 1
+            #self.PROG_NAMES = []
+            
+        self.PROG_NAME_CURRENT = progname_i
+        self.PROG_NAMES.append(progname_i)
         
-    def ProgStart(self, progname):
-        self.nPROGS = self.nPROGS + 1
-        
-    def ProgFinish(self, progname):    
-        if self.nPROGS > 1:
-            # Fanuc does not support defining multiple programs in the same file, so one program per file
-            return
+    def ProgFinish(self, progname, new_page = False):
+        progname = get_safe_name(progname)
+        if not new_page:
+            # Reset page count
+            self.nPages = 0
+            
+        #if self.nPROGS > 1:
+        #    # Fanuc does not support defining multiple programs in the same file, so one program per file
+        #    return
         header = ''
-        header = header + ('/PROG  %s' % progname) + '\n'
+        header = header + ('/PROG  %s' % self.PROG_NAME_CURRENT) + '\n' # Use the latest name set at ProgStart
         header = header + '/ATTR' + '\n'
         header = header + 'OWNER\t\t= MNEDITOR;' + '\n'
         header = header + 'COMMENT\t\t= "RoboDK sequence";' + '\n'
@@ -135,13 +201,24 @@ class RobotPost(object):
             header = header + 'LINE_TRACK_BOUNDARY_NUMBER      : 0;' + '\n'
             header = header + 'CONTINUE_TRACK_AT_PROG_END      : FALSE;' + '\n'
             header = header + '' + '\n'
-        header = header + '/MN' + '\n'    
+        header = header + '/MN'
+        #header = header + '/MN' + '\n'    # Important! Last line should not have \n
         
-        self.PROG = header + self.PROG + '/POS' + '\n'
-        self.PROG = self.PROG + self.PROG_TARGETS
-        self.PROG = self.PROG + '/END\n'        
+        self.PROG.insert(0, header)
+        self.PROG.append('/POS')
+        self.PROG += self.PROG_TARGETS
+        self.PROG.append('/END')
         
-    def ProgSave(self, folder, progname, ask_user = False, show_result = False):
+        # Save PROG in PROG_LIST
+        self.PROG_LIST.append(self.PROG)
+        self.PROG = []
+        self.PROG_TARGETS = []
+        #self.nLines = 0
+        self.LINE_COUNT = 0
+        self.P_COUNT = 0
+        self.LBL_ID_COUNT = 0
+        
+    def progsave(self, folder, progname, ask_user = False, show_result = False):
         print(folder)
         if not folder.endswith('/'):
             folder = folder + '/'
@@ -155,10 +232,13 @@ class RobotPost(object):
         else:
             filesave = folder + progname
         fid = open(filesave, "w")
-        fid.write(self.PROG)
+        #fid.write(self.PROG)
+        for line in self.PROG:
+            fid.write(line)
+            fid.write('\n')
         fid.close()
         print('SAVED: %s\n' % filesave) # tell RoboDK the path of the saved file
-        self.PROG_FILES = filesave
+        self.PROG_FILES.append(filesave)
         
         # open file with default application
         if show_result:
@@ -166,23 +246,86 @@ class RobotPost(object):
                 # Open file with provided application
                 import subprocess
                 p = subprocess.Popen([show_result, filesave])
+            elif type(show_result) is list:
+                import subprocess
+                p = subprocess.Popen(show_result + [filesave])   
             else:
                 # open file with default application
                 import os
                 os.startfile(filesave)
-            if len(self.LOG) > 0:
-                mbox('Program generation LOG:\n\n' + self.LOG)
+            #if len(self.LOG) > 0:
+            #    mbox('Program generation LOG:\n\n' + self.LOG)
         # -------- build with MakeTP ---------
         # set robot first with setrobot.exe (delete robot.ini file)
         PATH_MAKE_TP = 'C:/Program Files (x86)/FANUC/WinOLPC/bin/'
         if FileExists(PATH_MAKE_TP + 'MakeTP.exe'):
             filesave_TP = filesave[:-3] + '.TP'
             print("POPUP: Compiling LS file with MakeTP.exe: %s..." % progname)
+            sys.stdout.flush()
             import subprocess
-            output = subprocess.check_output([PATH_MAKE_TP + 'MakeTP.exe', filesave.replace('/','\\'), filesave_TP.replace('/','\\'), '/config', PATH_MAKE_TP + 'robot.ini'])
-            self.LOG = output.decode('utf-8')
+            command = [PATH_MAKE_TP + 'MakeTP.exe', filesave.replace('/','\\'), filesave_TP.replace('/','\\'), '/config', PATH_MAKE_TP + 'robot.ini']
+            #output = subprocess.check_output(command)
+            #self.LOG = output.decode('utf-8')
+            self.LOG += 'Program generation for: ' + progname + '\n'
+            with subprocess.Popen(command, stdout=subprocess.PIPE, bufsize=1, universal_newlines=True) as p:
+                for line in p.stdout:
+                    line_ok = line.strip()
+                    self.LOG += line_ok + '\n'
+                    print("POPUP: " + line_ok)
+                    sys.stdout.flush()
+            self.LOG += '\n'
             
-        if len(self.LOG) > 0:
+            
+    def ProgSave(self, folder, progname, ask_user = False, show_result = False):
+        progname = get_safe_name(progname)
+        nfiles = len(self.PROG_LIST)
+        if nfiles >= 1:
+            if self.LINE_COUNT > 0:
+                # Progfinish was not called!
+                print("Warning: ProgFinish was not called properly")
+                self.PROG_LIST.append(self.PROG)
+                self.PROG_NAMES.append("Unknown")
+                self.PROG = []
+                self.LINE_COUNT = 0
+            
+            if len(self.PROG_NAMES_MAIN) > 1:
+                # Warning: the program might be cut to a maximum number of chars
+                progname_main = "M_" + self.PROG_NAMES_MAIN[0]
+                self.INCLUDE_SUB_PROGRAMS = True # Force generation of main program
+                self.ProgStart(progname_main)
+                for prog_call in self.PROG_NAMES_MAIN:
+                    self.RunCode(prog_call, True)
+                    
+                self.ProgFinish(progname_main)
+            
+            # Save the last program added to the PROG_LIST
+            self.PROG = self.PROG_LIST.pop()
+            progname_last = self.PROG_NAMES.pop()
+            self.progsave(folder, progname_last, ask_user, show_result)
+            #-------------------------
+            #self.LOG = ''
+            if len(self.PROG_FILES) == 0:
+                # cancelled by user
+                return
+                
+            first_file = self.PROG_FILES[0]
+            folder_user = getFileDir(first_file)
+            # progname_user = getFileName(self.FILE_SAVED)
+            
+            # Generate each program
+            for i in range(len(self.PROG_LIST)):
+                self.PROG = self.PROG_LIST[i]
+                self.progsave(folder_user, self.PROG_NAMES[i], False, show_result)
+                
+        elif nfiles == 1:
+            self.PROG = self.PROG_NAMES[0]
+            self.progsave(folder, progname, ask_user, show_result)
+            
+        else:
+            print("Warning! Program has not been properly finished")
+            self.progsave(folder, progname, ask_user, show_result)
+
+        if show_result and len(self.LOG) > 0:
             mbox('Program generation LOG:\n\n' + self.LOG)
         
     def ProgSendRobot(self, robot_ip, remote_path, ftp_user, ftp_pass):
@@ -192,22 +335,42 @@ class RobotPost(object):
         
     def MoveJ(self, pose, joints, conf_RLF=None):
         """Add a joint movement"""
+        self.page_size_control() # Important to control the maximum lines per program and not save last target on new program
+        
         target_id = self.add_target_joints(pose, joints)
         move_ins = 'P[%i] %s %s ;' % (target_id, self.JOINT_SPEED, self.CNT_VALUE)
         self.addline(move_ins, 'J')
+        self.LAST_POSE = pose
         
     def MoveL(self, pose, joints, conf_RLF=None):
         """Add a linear movement"""
-        target_id = self.add_target_cartesian(pose, joints, conf_RLF)
-        move_ins = 'P[%i] %s %s ;' % (target_id, self.SPEED, self.CNT_VALUE)
+        
+        #if self.LAST_POSE is not None and pose is not None:
+        #    # Skip adding a new movement if the new position is the same as the last one
+        #    if distance(pose.Pos(), self.LAST_POSE.Pos()) < 0.1 and pose_angle_between(pose, self.LAST_POSE) < 0.1:
+        #        return
+
+        self.page_size_control() # Important to control the maximum lines per program and not save last target on new program
+                
+        if pose is None:
+            target_id = self.add_target_joints(pose, joints)
+            move_ins = 'P[%i] %s %s ;' % (target_id, self.SPEED, self.CNT_VALUE)
+        else:
+            target_id = self.add_target_cartesian(pose, joints, conf_RLF)
+            move_ins = 'P[%i] %s %s ;' % (target_id, self.SPEED, self.CNT_VALUE)
+            
         self.addline(move_ins, 'L')
+        self.LAST_POSE = pose
         
     def MoveC(self, pose1, joints1, pose2, joints2, conf_RLF_1=None, conf_RLF_2=None):
         """Add a circular movement"""
+        self.page_size_control() # Important to control the maximum lines per program and not save last target on new program
+        
         target_id1 = self.add_target_cartesian(pose1, joints1, conf_RLF_1)
         target_id2 = self.add_target_cartesian(pose2, joints2, conf_RLF_2)
         move_ins = 'P[%i] \n       P[%i] %s %s ;' % (target_id1, target_id2, self.SPEED, self.CNT_VALUE)
         self.addline(move_ins, 'C')
+        self.LAST_POSE = pose2
         
     def setFrame(self, pose, frame_id=None, frame_name=None):
         """Change the robot reference frame"""
@@ -248,9 +411,18 @@ class RobotPost(object):
         
     def setSpeed(self, speed_mms):
         """Changes the robot speed (in mm/s)"""
-        self.SPEED = '%.0fmm/sec' % max(speed_mms, 0.01)
-        # assume 5000 mm/s as 100%
-        self.JOINT_SPEED = '%.0f%%' % max(min(100.0*speed_mms/5000.0, 100.0), 1) # Saturate percentage speed between 1 and 100
+        if self.SPEED_BACKUP is None:
+            # Set the normal speed
+            self.SPEED = '%.0fmm/sec' % max(speed_mms, 0.01)
+            # assume 5000 mm/s as 100%
+            self.JOINT_SPEED = '%.0f%%' % max(min(100.0*speed_mms/5000.0, 100.0), 1) # Saturate percentage speed between 1 and 100
+
+        else:
+            # Do not alter the speed as we are in ARC movement mode
+            # skip speed settings if it has been overriden
+            self.SPEED_BACKUP = '%.0fmm/sec' % max(speed_mms, 0.01)
+            # assume 5000 mm/s as 100%
+            #self.JOINT_SPEED = '%.0f%%' % max(min(100.0*speed_mms/5000.0, 100.0), 1) # Saturate percentage speed between 1 and 100
     
     def setAcceleration(self, accel_mmss):
         """Changes the robot acceleration (in mm/s2)"""
@@ -258,7 +430,8 @@ class RobotPost(object):
     
     def setSpeedJoints(self, speed_degs):
         """Changes the robot joint speed (in deg/s)"""
-        self.addlog('setSpeedJoints not defined')
+        #self.addlog('setSpeedJoints not defined')
+        self.JOINT_SPEED = '%.0f%%' % max(min(100.0*speed_degs/200.0, 100.0), 1) # Saturate percentage speed between 1 and 100
     
     def setAccelerationJoints(self, accel_degss):
         """Changes the robot joint acceleration (in deg/s2)"""
@@ -304,51 +477,100 @@ class RobotPost(object):
             self.addline('MESSAGE[Timed out for LBL %i] ;' % self.LBL_ID_COUNT)
             self.addline('PAUSE ;')
             self.addline('LBL[%i] ;' % self.LBL_ID_COUNT)
-        
+       
+    def addlastline(self, add_params):
+        """Add parameters to the last command"""
+        if len(self.PROG) > 0 and self.PROG[-1].endswith(';\n'):
+            self.PROG[-1] = self.PROG[-1][:-2] + add_params + ';' # remove last 2 characters
+            
     def RunCode(self, code, is_function_call = False):
         """Adds code or a function call"""
         if is_function_call:
+            code = get_safe_name(code, 12)
+            if code.startswith("ArcStart"):
+                if not code.endswith(')'):
+                    code = code + '()'
+                
+                self.ARC_PARAMS = code[9:-1]
+                if len(self.ARC_PARAMS) < 1:
+                    # Use default sine wave parameters
+                    self.ARC_PARAMS = '2.0Hz,8.0mm,0.075s,0.075'
+                
+                # use desired weld speed:
+                self.SPEED_BACKUP = self.SPEED
+                self.SPEED = 'WELD_SPEED'
+                
+                # Provoke ARC START:
+                self.addlastline('Arc Start[11]')
+                
+                # Tune weave with parameters
+                self.addline('Weave Sine[%s] ;' % self.ARC_PARAMS)
+                return # Do not generate default program call
+            elif code.startswith("ArcEnd"):
+                # Provoke ARC END:
+                self.addlastline('Arc End[11]')
+                
+                # Revert to desired speed
+                self.SPEED = self.SPEED_BACKUP
+                self.SPEED_BACKUP = None
+                
+                self.ARC_PARAMS = None
+                return # Do not generate default program call
+            
+            # default program call
             code.replace(' ','_')
             self.addline('CALL %s ;' % (code))
         else:
+            if not code.endswith(';'):
+                code = code + ';'
             self.addline(code)
         
     def RunMessage(self, message, iscomment = False):
         """Add a joint movement"""
         if iscomment:
             #pass
-            for i in range(0,len(message), 35):
-                i2 = min(i + 35, len(message))
+            for i in range(0,len(message), 20):
+                i2 = min(i + 20, len(message))
                 self.addline('! %s ;' % message[i:i2])
                 
         else:
-            for i in range(0,len(message), 30):
-                i2 = min(i + 30, len(message))
+            for i in range(0,len(message), 20):
+                i2 = min(i + 20, len(message))
                 self.addline('MESSAGE[%s] ;' % message[i:i2])
         
-# ------------------ private ----------------------                
+# ------------------ private ----------------------
+    def page_size_control(self):
+        if self.LINE_COUNT >= self.MAX_LINES_X_PROG:
+            #self.nLines = 0
+            self.ProgFinish(self.PROG_NAME, True)
+            self.ProgStart(self.PROG_NAME, True)
+
+
     def addline(self, newline, movetype = ' '):
         """Add a program line"""
-        if self.nPROGS > 1:
-            # Fanuc does not support defining multiple programs in the same file, so one program per file
+        if self.nProgs > 1 and not self.INCLUDE_SUB_PROGRAMS:
             return
+        
+        self.page_size_control()
+        
         self.LINE_COUNT = self.LINE_COUNT + 1
         newline_ok = ('%4i:%s ' % (self.LINE_COUNT, movetype)) + newline            
-        self.PROG = self.PROG + newline_ok + '\n'
+        self.PROG.append(newline_ok)
             
     def addline_targets(self, newline):
         """Add a line at the end of the program (used for targets)"""
-        if self.nPROGS > 1:
-            # Fanuc does not support defining multiple programs in the same file, so one program per file
-            return
-        self.PROG_TARGETS = self.PROG_TARGETS + newline + '\n'            
+        self.PROG_TARGETS.append(newline)
         
     def addlog(self, newline):
         """Add a log message"""
+        if self.nProgs > 1 and not self.INCLUDE_SUB_PROGRAMS:
+            return
         self.LOG = self.LOG + newline + '\n'
         
 # ------------------ targets ----------------------         
     def add_target_joints(self, pose, joints):
+        if self.nProgs > 1 and not self.INCLUDE_SUB_PROGRAMS:
+            return
         self.P_COUNT = self.P_COUNT + 1
         add_comma = ""
         if self.HAS_TRACK:
@@ -378,6 +600,8 @@ class RobotPost(object):
         return self.P_COUNT
     
     def add_target_cartesian(self, pose, joints, conf_RLF=None):
+        if self.nProgs > 1 and not self.INCLUDE_SUB_PROGRAMS:
+            return
         def angle_2_turn(angle):
             if angle >= 0.0:
                 return +math.floor((+angle+180.0)/360.0)
@@ -385,12 +609,11 @@ class RobotPost(object):
                 return -math.floor((-angle+180.0)/360.0)
         #return add_target_joints(pose, joints) # using joints as targets is safer to avoid problems setting up the reference frame and configurations
         xyzwpr = Pose_2_Fanuc(pose)
-        # config: 01234
         config = ['N','U','T'] #normal        
         #config= ['F','D','B'] #alternative
         if conf_RLF is not None:
             if conf_RLF[2] > 0:
-                config[0] = 'F'
+                config[0] = 'F' # F means axis 5 >= 0, N means axis 5 < 0
             if conf_RLF[1] > 0:
                 config[1] = 'D'
             if conf_RLF[0] > 0:
@@ -503,7 +726,11 @@ def test_post():
     robot.MoveL(Pose([250, 150, 191.421356, 180, 0, -150]), [-43.82111, 3.29703, -40.29493, 56.02402, 56.61169, -249.23532] )
     robot.ProgFinish("Program")
     # robot.ProgSave(".","Program",True)
-    print(robot.PROG)
+    
+    robot.PROG = robot.PROG_LIST.pop()
+    for line in robot.PROG:
+        print(line)
+    
     if len(robot.LOG) > 0:
         mbox('Program generation LOG:\n\n' + robot.LOG)
 

@@ -37,7 +37,7 @@
 # ----------------------------------------------------
 # More information about RoboDK Post Processors and Offline Programming here:
 #     http://www.robodk.com/help#PostProcessor
-#     http://www.robodk.com/doc/PythonAPI/postprocessor.html
+#     http://www.robodk.com/doc/en/PythonAPI/postprocessor.html
 # ----------------------------------------------------
 
 
@@ -130,6 +130,9 @@ class RobotPost(object):
                 # Open file with provided application
                 import subprocess
                 p = subprocess.Popen([show_result, filesave])   
+            elif type(show_result) is list:
+                import subprocess
+                p = subprocess.Popen(show_result + [filesave])   
             else:
                 # open file with default application
                 import os
@@ -235,10 +238,10 @@ class RobotPost(object):
         
     def RunMessage(self, message, iscomment = False):
         """Display a message in the robot controller screen (teach pendant)"""
-        #if iscomment:
-            #self.addline('% ' + message)
-        #else:
-            #self.addlog('Show message on teach pendant not implemented (%s)' % message)
+        if iscomment:
+            self.addline("' " + message)
+        else:
+            self.addline('Print "%s"' % message)
         
 # ------------------ private ----------------------                
     def addline(self, newline):
@@ -276,10 +279,10 @@ def test_post():
     robot.MoveC(Pose([200, 200, 34, 180, 0, -150]), [-43.73892, -3.91728, -35.77935, 58.57566, 54.11615, -253.81122],Pose([200, 200, 15, 180, 0, -150]), [-43.73892, -3.91728, -35.77935, 58.57566, 54.11615, -253.81122])
     #robot.setFrame(Pose([192.305408, 222.255946, 0.000000, 0.000000, 0.000000, 0.000000]),5,'Frame 5')
     robot.setSpeed(30)
-    robot.Delay(1000)
+    #robot.Delay(1000)
     
-    robot.ProgFinish("Program")
-    robot.ProgSave(".","Program",True)
+    #robot.ProgFinish("Program")
+    #robot.ProgSave(".","Program",True)
     print(robot.PROG)
     if len(robot.LOG) > 0:
         mbox('Program generation LOG:\n\n' + robot.LOG)

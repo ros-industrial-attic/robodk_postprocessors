@@ -37,7 +37,7 @@
 # ----------------------------------------------------
 # More information about RoboDK Post Processors and Offline Programming here:
 #     http://www.robodk.com/help#PostProcessor
-#     http://www.robodk.com/doc/PythonAPI/postprocessor.html
+#     http://www.robodk.com/doc/en/PythonAPI/postprocessor.html
 # ----------------------------------------------------
 
 
@@ -46,7 +46,8 @@
 from robodk import *
 
 
-HEADER = ''';FOLD INI
+HEADER = '''
+;FOLD INI
 BAS (#INITMOV,0 )
 ;ENDFOLD (INI)
 
@@ -107,7 +108,7 @@ class RobotPost(object):
     PROG_FILES = []
     
     PROG = ''
-    PROG_CSV = ''
+    PROG_CSV = []
     LOG = ''
     nAxes = 6
     E01 = 0
@@ -161,7 +162,9 @@ class RobotPost(object):
         fid.write(self.PROG)
         fid.close()
         fidcsv = open(filesave_csv, "w")
-        fidcsv.write(self.PROG_CSV)
+        for line in self.PROG_CSV:
+            fidcsv.write(line)
+            fidcsv.write('\n')        
         fidcsv.close()
         
         print('SAVED: %s\n' % filesave) # tell RoboDK the path of the saved file
@@ -173,6 +176,9 @@ class RobotPost(object):
                 # Open file with provided application
                 import subprocess
                 p = subprocess.Popen([show_result, filesave, filesave_csv])
+            elif type(show_result) is list:
+                import subprocess
+                p = subprocess.Popen(show_result + [filesave])   
             else:
                 # open file with default application
                 import os
@@ -221,7 +227,7 @@ class RobotPost(object):
         else:
             self.addlog('Warning: Can not set the reference frame inside CSV file')
         
-    def setTool(self, pose, tool_id=None, tool_name=None):
+    def setTool(self, pose, tool_id, tool_name):
         """Change the robot TCP"""
         if tool_id is not None and tool_id >= 0:
             self.TOOL_ID = tool_id
@@ -344,57 +350,19 @@ class RobotPost(object):
         if iscomment:
             self.addline('; ' + message)
         else:
-            self.addline('Wait for StrClear($LOOP_MSG[])')
-            self.addline('$LOOP_CONT = TRUE')
-            self.addline('$LOOP_MSG[] = "%s"' % message)
+            pass
+            #self.addline('Wait for StrClear($LOOP_MSG[])')
+            #self.addline('$LOOP_CONT = TRUE')
+            #self.addline('$LOOP_MSG[] = "%s"' % message)
             
 # ------------------ private ----------------------                
-    def addline_csv(self, pose_csv):
-        def Calculate_Time(Dist, Vmax, Amax):
-            '''Calculate the time it takes to move a distance Dist at Amax acceleration and Vmax speed'''
-            tacc = Vmax/Amax;
-            Xacc = 0.5*Amax*tacc*tacc;
-            if Dist <= 2*Xacc:
-                # Vmax is not reached
-                tacc = sqrt(Dist/Amax)
-                Ttot = tacc*2
-            else:
-                # Vmax is reached
-                Xvmax = Dist - 2*Xacc
-                Tvmax = Xvmax/Vmax
-                Ttot = 2*tacc + Tvmax
-            return Ttot
-            
-        def Calculate_Speed(d, T, a):
-            '''Calculate the speed required to move a distance d in T seconds with constant acceleration a'''
-            warning_msg = ''
-            to_root = a*a*T*T - 4*d*a
-            if to_root <= 0:
-                Treal = Calculate_Time(d, self.SPEED_MMS_MAX, a)
-                warning_msg = 'Warning: Move %i will take %.3f s instead of %.3f s (increase acceleration to reach speed)' % (self.nLineCSV, Treal, T)
-                print(warning_msg)
-                return self.SPEED_MMS_MAX, warning_msg
-            else:
-                speed_set = 0.5*(a*T - sqrt(to_root))
-                if speed_set > self.SPEED_MMS_MAX:
-                    warning_msg = 'Warning: Max speed reached %.3f mm/s > %.3f mm/s for move %i, increase max speed to respect average speed' % (self.nLineCSV, speed_set, self.SPEED_MMS_MAX)
-                    print(warning_msg)
-                    speed_set = self.SPEED_MMS_MAX
-                return max(speed_set, 0.01), warning_msg
-    
+    def addline_csv(self, pose_csv):    
         self.nLineCSV = self.nLineCSV + 1
         [x,y,z,r,p,w] = pose_2_xyzrpw(pose_csv)
-        speed_time_desired = self.SPEED_MMS
-        if self.LAST_POSE_CSV is not None:
-            dist = norm(subs3(pose_csv.Pos(), self.LAST_POSE_CSV.Pos()))
-            time_desired = dist/self.SPEED_MMS
-            speed_time_desired, warning_msg = Calculate_Speed(dist, time_desired, self.ACCEL_MMSS)
-            if len(warning_msg) > 0:
-                self.PROG = self.PROG + '; ' + warning_msg + '\n'
-        self.LAST_POSE_CSV = pose_csv
-        
+        speed_time_desired = self.SPEED_MMS    
         newline = '%i;%.4f;%.4f;%.4f;%.4f;%.4f;%.4f;%i;%.3f;1;0;0;0;%i;%.4f' % (self.nLineCSV, x,y,z,r,p,w, self.nLineCSV, speed_time_desired, self.TOOL_ID, self.E01)
-        self.PROG_CSV = self.PROG_CSV + newline + '\n'
+        self.PROG_CSV.append(newline)
+        
 #1 Order of targets    
 #2,3,4,5,6,7: X,Y,Z,A,B,C-axis movements (coordinates relative to the workspace frame)
 #8 User Parameter[1], Order of CNC line (same as column 1 if no other subprograms are running)

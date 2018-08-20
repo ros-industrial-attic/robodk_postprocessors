@@ -10,7 +10,8 @@
 # limitations under the License.
 
 # ----------------------------------------------------
-# This file is a sample POST PROCESSOR script to generate robot programs for a B&R Automation controller
+# This file is a sample POST PROCESSOR script to generate robot programs for
+# KUKA CNC
 #
 # To edit/test this POST PROCESSOR script file:
 # Select "Program"->"Add/Edit Post Processor", then select your post or create a new one.
@@ -44,17 +45,17 @@
 # Import RoboDK tools
 from robodk import *
 
-JOINT_DATA = ['Q1','Q2','Q3','Q4','Q5','Q6','Ra','Rb','Rc']
+JOINT_DATA = ['X','Y','Z','A','B','C','X1=','Y1=','Z1=']
 
 # ----------------------------------------------------
 def pose_2_str(pose, joints = None):
     """Prints a pose target"""
     [x,y,z,r,p,w] = Pose_2_KUKA(pose)        
-    str_xyzwpr = 'X %.3f Y %.3f Z %.3f A %.3f B %.3f C %.3f' % (x,y,z,r,p,w)
+    str_xyzwpr = 'X%.4f Y%.4f Z%.4f A%.4f B%.4f C%.4f' % (x,y,z,r,p,w)
     if joints is not None:        
         if len(joints) > 6:
             for j in range(6,len(joints)):
-                str_xyzwpr += (' %s %.6f ' % (JOINT_DATA[j], joints[j]))
+                str_xyzwpr += (' %s%.6f ' % (JOINT_DATA[j], joints[j]))
     
     return str_xyzwpr
     
@@ -62,7 +63,7 @@ def joints_2_str(joints):
     """Prints a joint target"""
     str = ''
     for i in range(len(joints)):
-        str = str + ('%s %.6f ' % (JOINT_DATA[i], joints[i]))
+        str = str + ('%s%.6f ' % (JOINT_DATA[i], joints[i]))
     str = str[:-1]
     return str
 
@@ -70,35 +71,54 @@ def joints_2_str(joints):
 # Object class that handles the robot instructions/syntax
 class RobotPost(object):
     """Robot post object"""
-    PROG_EXT = 'cnc'        # set the program extension
+    PROG_EXT = 'nc'        # set the program extension
     
     # other variables
     ROBOT_POST = ''
     ROBOT_NAME = ''
     PROG_FILES = []
     
-    PROG = ''
+    PROG = []
     LOG = ''
     nAxes = 6
     nId = 0
+    SPEED_F = ' F400' # Set default speed
+    MoveType = -1
+    
+    MOVE_TYPE_NONE = -1
+    MOVE_NAMES = []
+    MOVE_TYPE_MCS = 0
+    MOVE_NAMES.append("MCS")
+    MOVE_TYPE_HSC = 1
+    MOVE_NAMES.append("HSC")
+    MOVE_TYPE_PTP = 2
+    MOVE_NAMES.append("PTP")
+    
+    
     REF_FRAME = eye(4)
 
     
     def __init__(self, robotpost=None, robotname=None, robot_axes = 6, **kwargs):
         self.ROBOT_POST = robotpost
         self.ROBOT_NAME = robotname
-        self.PROG = ''
+        self.PROG = []
         self.LOG = ''
         self.nAxes = robot_axes
         
     def ProgStart(self, progname):
-        self.addline('; program: %s()' % progname)
-        self.addline('G161')
+        self.addline('%% program: %s()' % progname, False)
+        self.addline('', False)
         self.addline('G90')
-        self.addline('F15000')        
+        self.addline('#HSC [BSPLINE PATH_DEV 0.0000 TRACK_DEV 0.0000]', False)
+        self.addline('#CS OFF ALL')
+        self.addline('#CS DEF[1][0.0000,0.0000,0.0000,0.0000,0.0000,0.0000]')
+        self.addline('#CS ON[1]')
+        self.addline('G54')
+        self.addline('', False)
         
     def ProgFinish(self, progname):
-        self.addline('; ENDPROC')
+        self.set_move_type(self.MOVE_TYPE_NONE)
+        self.addline('%% End of program %s' % progname, False)
         
     def ProgSave(self, folder, progname, ask_user=False, show_result=False):
         progname = progname + '.' + self.PROG_EXT
@@ -111,7 +131,8 @@ class RobotPost(object):
         else:
             filesave = folder + '/' + progname
         fid = open(filesave, "w")
-        fid.write(self.PROG)
+        for line in self.PROG:
+            fid.write(line + '\n')
         fid.close()
         print('SAVED: %s\n' % filesave)
         self.PROG_FILES = filesave
@@ -136,49 +157,76 @@ class RobotPost(object):
         """Send a program to the robot using the provided parameters. This method is executed right after ProgSave if we selected the option "Send Program to Robot".
         The connection parameters must be provided in the robot connection menu of RoboDK"""
         UploadFTP(self.PROG_FILES, robot_ip, remote_path, ftp_user, ftp_pass)
+    
+    def set_move_type(self, move_type):
+        if self.MoveType == move_type:
+            return
+            
+        if self.MoveType >= 0:
+            self.addline("#%s OFF" % self.MOVE_NAMES[self.MoveType])
+            self.MoveType = -1
         
+        if move_type >= 0:
+            self.addline('',False) # add empty line
+            self.addline("#%s ON" % self.MOVE_NAMES[move_type])
+            self.MoveType = move_type
+            
     def MoveJ(self, pose, joints, conf_RLF=None):
         """Add a joint movement"""
-        self.nId = self.nId + 1
-        self.addline('N%02i G101 ' % self.nId + joints_2_str(joints))
+        self.set_move_type(self.MOVE_TYPE_MCS)
+        self.addline('G0 ' + joints_2_str(joints))
+        
+        if pose is not None:
+            self.set_move_type(self.MOVE_TYPE_PTP)
+            self.addline('G0 ' + pose_2_str(pose, joints))
         
     def MoveL(self, pose, joints, conf_RLF=None):
         """Add a linear movement"""
-        self.nId = self.nId + 1
-        self.addline('N%02i G1 ' % self.nId + pose_2_str(self.REF_FRAME*pose, joints))
-        #self.addline('N%02i G90 G1 ' % self.nId + joints_2_str(joints))
+        self.set_move_type(self.MOVE_TYPE_HSC)
+        self.addline('G1 ' + pose_2_str(self.REF_FRAME*pose, joints) + self.SPEED_F)
+        self.SPEED_F = ''
         
     def MoveC(self, pose1, joints1, pose2, joints2, conf_RLF_1=None, conf_RLF_2=None):
         """Add a circular movement"""
-        self.nId = self.nId + 1
         xyz1 = (self.REF_FRAME*pose1).Pos()
         xyz2 = (self.REF_FRAME*pose2).Pos()        
-        self.addline('N%02i G90 G102 X%.3f Y%.3f Z%.3f I1=%.3f J1=%.3f K1=%.3f' % (self.nId, xyz2[0], xyz2[1], xyz2[2], xyz1[0], xyz1[1], xyz1[2]))
+        self.addline('G2 X%.3f Y%.3f Z%.3f I1=%.3f J1=%.3f K1=%.3f' % (xyz2[0], xyz2[1], xyz2[2], xyz1[0], xyz1[1], xyz1[2]))
         #self.addline('N%02i G102 X%.3f Y%.3f Z%.3f I1=%.3f J1=%.3f K1=%.3f' % (self.nId, xyz1[0], xyz1[1], xyz1[2], xyz2[0]-xyz1[0], xyz2[1]-xyz1[1], xyz2[2]-xyz1[2]))		
         
     def setFrame(self, pose, frame_id=None, frame_name=None):
         """Change the robot reference frame"""
         self.REF_FRAME = pose
-        self.addline('; Reference frame set to: ' + pose_2_str(pose))
-        self.addline(('; N%02i G90 G92 ' % self.nId) + pose_2_str(pose))
+        self.addline('%% Using Reference %s: %s' % (frame_name, pose_2_str(pose)), False)
+        self.addline('%% (Using absolute coordinates)', False)
         
     def setTool(self, pose, tool_id=None, tool_name=None):
         """Change the robot TCP"""
-        self.nId = self.nId + 1
-        self.addline('; Tool frame set to: ' + pose_2_str(pose))
-        self.addline(('; N%02i G90 G92 ' % self.nId) + pose_2_str(pose))
-        pass
+        self.addline('', False)
+        self.addline('%% Using Tool %s: %s' % (tool_name, pose_2_str(pose)), False)
+        if tool_id < 1:
+            tool_id = 99
+
+        self.addline('M5')
+        self.addline('#TRAFO OFF')
+        self.addline('M6 T%i' % tool_id)
+        self.addline('#TRAFO ON')
+        self.addline('M3 S3501')
+        self.addline('G131 100')
+        self.addline('G133 150')
+        self.addline('G134 150')
+        self.addline('', False)
+        
         
     def Pause(self, time_ms):
         """Pause the robot program"""
         if time_ms < 0:
-            self.addline('; PAUSE')
+            self.addline('%% PAUSE', False)
         else:
-            self.addline('; WAIT %.3f' % (time_ms*0.001))
+            self.addline('%% WAIT %.3f' % (time_ms*0.001), False)
     
     def setSpeed(self, speed_mms):
         """Changes the robot speed (in mm/s)"""
-        self.addline('F%.3f' % (speed_mms*60))
+        self.SPEED_F = ' F%.3f' % (speed_mms*60)
     
     def setAcceleration(self, accel_mmss):
         """Changes the robot acceleration (in mm/s2)"""
@@ -238,14 +286,18 @@ class RobotPost(object):
     def RunMessage(self, message, iscomment = False):
         """Display a message in the robot controller screen (teach pendant)"""
         if iscomment:
-            self.addline('; ' + message)
+            self.addline('%% ' + message, False)
         else:
-            self.addline('; Show message: %s' % message)
+            self.addline('%% Show message: %s' % message, False)
         
 # ------------------ private ----------------------                
-    def addline(self, newline):
+    def addline(self, newline, add_N = True):
         """Add a program line"""
-        self.PROG = self.PROG + newline + '\n'
+        if add_N:
+            self.nId += 1
+            newline = 'N%i ' % self.nId + newline
+        
+        self.PROG.append(newline)
         
     def addlog(self, newline):
         """Add a log message"""
@@ -273,8 +325,8 @@ def test_post():
 
     robot.ProgStart("Program")
     robot.RunMessage("Program generated by RoboDK using a custom post processor", True)
-    robot.setFrame(Pose([807.766544, -963.699898, 41.478944, 0, 0, 0]))
-    robot.setTool(Pose([62.5, -108.253175, 100, -60, 90, 0]))
+    robot.setFrame(Pose([807.766544, -963.699898, 41.478944, 0, 0, 0]), 3, 'Reference 2')
+    robot.setTool(Pose([62.5, -108.253175, 100, -60, 90, 0]), 5, 'Tool 5')
     robot.MoveJ(Pose([200, 200, 500, 180, 0, 180]), [-46.18419, -6.77518, -20.54925, 71.38674, 49.58727, -302.54752] )
     robot.MoveL(Pose([200, 250, 348.734575, 180, 0, -150]), [-41.62707, -8.89064, -30.01809, 60.62329, 49.66749, -258.98418] )
     robot.MoveL(Pose([200, 200, 262.132034, 180, 0, -150]), [-43.73892, -3.91728, -35.77935, 58.57566, 54.11615, -253.81122] )
@@ -293,7 +345,9 @@ def test_post():
     robot.MoveJ(None, [-46.18419, -6.77518, -20.54925, 71.38674, 49.58727, -302.54752] )
     robot.ProgFinish("Program")
     # robot.ProgSave(".","Program",True)
-    print(robot.PROG)
+    for line in robot.PROG:
+        print(line)
+        
     if len(robot.LOG) > 0:
         mbox('Program generation LOG:\n\n' + robot.LOG)
 

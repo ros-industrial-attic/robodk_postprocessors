@@ -46,8 +46,8 @@ M_WAIT_DI = 'M66'       # Provide the M code to wait for a digital input
 M_SET_DO_HIGH = 'M62'   # Provide the M code to set a digital output HIGH (1 or True)
 M_SET_DO_LOW = 'M62'    # Provide the M code to set a digital output LOW (0 or False)
 
-MM_2_UNITS = 1.0 # Use Millimeter units
-#MM_2_UNITS = 1.0/25.4 # Use Inch units
+#MM_2_UNITS = 1.0 # Use Millimeter units
+MM_2_UNITS = 1.0/25.4 # Use Inch units
 
 
 # ----------------------------------------------------
