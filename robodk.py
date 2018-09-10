@@ -1335,15 +1335,13 @@ def UploadFTP(program, robot_ip, remote_path, ftp_user, ftp_pass):
 # inspired from:
 # http://stackoverflow.com/questions/10057672/correct-way-to-implement-a-custom-popup-tkinter-dialog-box
 
-#------------------
-# Python 3.X only:
-import tkinter
-from tkinter import filedialog
-#------------------
-#Python 2.X only:
-#import Tkinter as tkinter
-#import tkFileDialog as filedialog
-#------------------
+try:
+    ## Python 2.X
+    import Tkinter as tkinter
+    import tkFileDialog as filedialog
+except ImportError:
+    ## Python 3.X
+    from tkinter import filedialog
 
 def getOpenFile():
     """Pop up a file dialog window to select a file to open."""
