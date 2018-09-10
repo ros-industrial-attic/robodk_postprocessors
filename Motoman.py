@@ -488,7 +488,7 @@ class RobotPost(object):
                 io_value = 'OFF'
         
         # at this point, io_var and io_value must be string values
-        if timeout_ms < 0:
+        if timeout_ms <= 0:
             #WAIT IN#(12)=ON
             self.addline('WAIT %s=%s' % (io_var, io_value))
         else:
