@@ -512,7 +512,7 @@ class RobotPost(object):
             self.addline(code)
         
     def RunMessage(self, message, iscomment = False):
-        """Add a joint movement"""
+        """Add a message/comment"""
         if iscomment:
             for i in range(0,len(message), 29):
                 i2 = min(i + 29, len(message))
