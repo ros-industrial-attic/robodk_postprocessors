@@ -103,7 +103,9 @@ class RobotPost(object):
     
     PROG_NAME = 'unknown'  # Original name of the current program (example: ProgA)
     PROG_NAME_CURRENT = 'unknown' # Auto generated name (different from PROG_NAME if we have more than 1 page per program. Example: ProgA2)
-    
+
+    PROG_COMMENT = 'Generated using RoboDK'
+
     nPages = 0           # Count the number of pages
     PROG_NAMES_MAIN = [] # List of programs called by a main program due to splitting
     
@@ -204,7 +206,7 @@ class RobotPost(object):
         header_ins += '//INST' + '\n'
         header_ins += '///DATE %s' % datestr + '\n'
         #///DATE 2012/04/25 14:11
-        header_ins += '///COMM Generated using RoboDK\n' # comment: max 28 chars
+        header_ins += '///COMM %s\n' % self.PROG_COMMENT[:28] # comment: max 28 chars
         if self.USE_RELATIVE_JOB:
             header_ins += '///ATTR SC,RW,RJ' + '\n'
             if self.ACTIVE_FRAME is not None:
