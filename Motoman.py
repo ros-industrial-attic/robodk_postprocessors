@@ -252,7 +252,7 @@ class RobotPost(object):
         else:
             filesave = folder + progname
         import io
-        fid = open(filesave, "w", newline='\r\n')
+        fid = io.open(filesave, "w", newline='\r\n')
         #fid.write(self.PROG)
         for line in self.PROG:
             fid.write(line.decode('unicode-escape'))
