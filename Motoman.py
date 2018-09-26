@@ -206,7 +206,7 @@ class RobotPost(object):
         header_ins += '//INST' + '\n'
         header_ins += '///DATE %s' % datestr + '\n'
         #///DATE 2012/04/25 14:11
-        header_ins += '///COMM %s\n' % self.PROG_COMMENT[:28] # comment: max 28 chars
+        header_ins += '///COMM %s\n' % self.PROG_COMMENT[:32] # comment: max 32 chars
         if self.USE_RELATIVE_JOB:
             header_ins += '///ATTR SC,RW,RJ' + '\n'
             if self.ACTIVE_FRAME is not None:
