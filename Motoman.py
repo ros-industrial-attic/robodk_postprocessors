@@ -210,7 +210,7 @@ class RobotPost(object):
         if self.USE_RELATIVE_JOB:
             header_ins += '///ATTR SC,RW,RJ' + '\n'
             if self.ACTIVE_FRAME is not None:
-                header_ins += '///FRAME USER %i' % self.ACTIVE_FRAME + '\n'           
+                header_ins += '////FRAME USER %i' % self.ACTIVE_FRAME + '\n'           
         else:
             header_ins += '///ATTR SC,RW' + '\n'
 
