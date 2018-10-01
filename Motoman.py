@@ -249,11 +249,12 @@ class RobotPost(object):
                 return
         else:
             filesave = folder + progname
-        fid = open(filesave, "w")
+        import io
+        fid = io.open(filesave, "w", newline='\r\n')
         #fid.write(self.PROG)
         for line in self.PROG:
-            fid.write(line)
-            fid.write('\n')
+            fid.write(line.decode('unicode-escape'))
+            fid.write(u'\n')
         fid.close()
         print('SAVED: %s\n' % filesave) # tell RoboDK the path of the saved file
         self.PROG_FILES.append(filesave)
