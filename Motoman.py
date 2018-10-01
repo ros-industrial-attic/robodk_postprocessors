@@ -448,7 +448,7 @@ class RobotPost(object):
     
     def setSpeedJoints(self, speed_degs):
         """Changes the robot joint speed (in deg/s)"""
-        speedj = max(0.01,min(speed,100.0)) # Joint speed must be in %
+        speedj = max(0.01, min(speed_degs, 100.0)) # Joint speed must be in %
         if speedj < 100:
             self.STR_VJ = "VJ=%.2f" % speedj
         else:
