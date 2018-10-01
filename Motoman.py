@@ -524,7 +524,33 @@ class RobotPost(object):
             for i in range(0,len(message), 25):
                 i2 = min(i + 25, len(message))
                 self.addline('MSG "%s"' % message[i:i2])
-        
+
+# ------------------ Motoman specifics ------------------
+    def Macro(self, number, mf, args):
+        macro_line = 'MACRO%s MJ#(%s)' % (number, mf)
+
+        if len(args) > 16:
+          self.addlog('Macro supports only 16 arguments')
+          return
+
+        for arg in args:
+            # Only ARGF are supported
+            macro_line += (' ARGF%s' % (arg))
+
+        self.addline(macro_line)
+
+    def Arcon(self, asf_number = 0):
+        if asf_number is 0:
+            self.addline('ARCON')
+        else:
+            self.addline('ARCON ASF#(%s)' % asf_number)
+
+    def Arcof(self, aef_number = 0):
+        if aef_number is 0:
+            self.addline('ARCOF')
+        else:
+            self.addline('ARCOF AEF#(%s)' % aef_number)
+ 
 # ------------------ private ----------------------
     def page_size_control(self):
         if self.LINE_COUNT >= self.MAX_LINES_X_PROG:
