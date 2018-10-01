@@ -157,7 +157,7 @@ class RobotPost(object):
         """Add a circular movement"""
         self.nTargets = self.nTargets + 1
         pi = self.nTargets
-        self.addline('P%i = %s' % (self.nTargets, pose_2_str(POSE_LAST)))
+        self.addline('P%i = %s' % (self.nTargets, pose_2_str(self.POSE_LAST)))
         self.addfooter('P%i=%s%s' % (self.nTargets, pose_2_str(Pose([0]*6)), self.STRUCT_FLAG))
         self.nTargets = self.nTargets + 1
         self.addline('P%i = %s' % (self.nTargets, pose_2_str(pose1)))
