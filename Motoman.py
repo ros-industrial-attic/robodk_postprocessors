@@ -41,7 +41,7 @@
 # ----------------------------------------------------
 
 
-def get_safe_name(progname, max_chars = 6):
+def get_safe_name(progname, max_chars = 32):
     """Get a safe program name"""
     # Remove special characters
     for c in r'-[]/\;,><&*:%=+@!#^()|?^':
@@ -206,7 +206,7 @@ class RobotPost(object):
         header_ins += '//INST' + '\n'
         header_ins += '///DATE %s' % datestr + '\n'
         #///DATE 2012/04/25 14:11
-        header_ins += '///COMM %s\n' % self.PROG_COMMENT[:32] # comment: max 32 chars
+        header_ins += '///COMM Generated using RoboDK\n' # comment: max 32 chars
         if self.USE_RELATIVE_JOB:
             header_ins += '///ATTR SC,RW,RJ' + '\n'
             if self.ACTIVE_FRAME is not None:
