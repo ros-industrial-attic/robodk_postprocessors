@@ -41,7 +41,7 @@
 # ----------------------------------------------------
 
 
-def get_safe_name(progname, max_chars = 32):
+def get_safe_name(progname, max_chars = 6):
     """Get a safe program name"""
     # Remove special characters
     for c in r'-[]/\;,><&*:%=+@!#^()|?^':
@@ -103,9 +103,7 @@ class RobotPost(object):
     
     PROG_NAME = 'unknown'  # Original name of the current program (example: ProgA)
     PROG_NAME_CURRENT = 'unknown' # Auto generated name (different from PROG_NAME if we have more than 1 page per program. Example: ProgA2)
-
-    PROG_COMMENT = 'Generated using RoboDK'
-
+    
     nPages = 0           # Count the number of pages
     PROG_NAMES_MAIN = [] # List of programs called by a main program due to splitting
     
@@ -206,11 +204,11 @@ class RobotPost(object):
         header_ins += '//INST' + '\n'
         header_ins += '///DATE %s' % datestr + '\n'
         #///DATE 2012/04/25 14:11
-        header_ins += '///COMM Generated using RoboDK\n' # comment: max 32 chars
+        header_ins += '///COMM Generated using RoboDK\n' # comment: max 28 chars
         if self.USE_RELATIVE_JOB:
             header_ins += '///ATTR SC,RW,RJ' + '\n'
             if self.ACTIVE_FRAME is not None:
-                header_ins += '///FRAME USER %i' % self.ACTIVE_FRAME + '\n'           
+                header_ins += '////FRAME USER %i' % self.ACTIVE_FRAME + '\n'           
         else:
             header_ins += '///ATTR SC,RW' + '\n'
 
@@ -251,12 +249,11 @@ class RobotPost(object):
                 return
         else:
             filesave = folder + progname
-        import io
-        fid = io.open(filesave, "w", newline='\r\n')
+        fid = open(filesave, "w")
         #fid.write(self.PROG)
         for line in self.PROG:
-            fid.write(line.decode('unicode-escape'))
-            fid.write(u'\n')
+            fid.write(line)
+            fid.write('\n')
         fid.close()
         print('SAVED: %s\n' % filesave) # tell RoboDK the path of the saved file
         self.PROG_FILES.append(filesave)
@@ -448,7 +445,7 @@ class RobotPost(object):
     
     def setSpeedJoints(self, speed_degs):
         """Changes the robot joint speed (in deg/s)"""
-        speedj = max(0.01, min(speed_degs, 100.0)) # Joint speed must be in %
+        speedj = max(0.01,min(speed,100.0)) # Joint speed must be in %
         if speedj < 100:
             self.STR_VJ = "VJ=%.2f" % speedj
         else:
@@ -490,7 +487,7 @@ class RobotPost(object):
                 io_value = 'OFF'
         
         # at this point, io_var and io_value must be string values
-        if timeout_ms <= 0:
+        if timeout_ms < 0:
             #WAIT IN#(12)=ON
             self.addline('WAIT %s=%s' % (io_var, io_value))
         else:
@@ -514,7 +511,7 @@ class RobotPost(object):
             self.addline(code)
         
     def RunMessage(self, message, iscomment = False):
-        """Add a message/comment"""
+        """Add a joint movement"""
         if iscomment:
             for i in range(0,len(message), 29):
                 i2 = min(i + 29, len(message))
@@ -524,33 +521,7 @@ class RobotPost(object):
             for i in range(0,len(message), 25):
                 i2 = min(i + 25, len(message))
                 self.addline('MSG "%s"' % message[i:i2])
-
-# ------------------ Motoman specifics ------------------
-    def Macro(self, number, mf, args):
-        macro_line = 'MACRO%s MJ#(%s)' % (number, mf)
-
-        if len(args) > 16:
-          self.addlog('Macro supports only 16 arguments')
-          return
-
-        for arg in args:
-            # Only ARGF are supported
-            macro_line += (' ARGF%s' % (arg))
-
-        self.addline(macro_line)
-
-    def Arcon(self, asf_number = 0):
-        if asf_number is 0:
-            self.addline('ARCON')
-        else:
-            self.addline('ARCON ASF#(%s)' % asf_number)
-
-    def Arcof(self, aef_number = 0):
-        if aef_number is 0:
-            self.addline('ARCOF')
-        else:
-            self.addline('ARCOF AEF#(%s)' % aef_number)
- 
+        
 # ------------------ private ----------------------
     def page_size_control(self):
         if self.LINE_COUNT >= self.MAX_LINES_X_PROG:
@@ -776,3 +747,4 @@ def test_post():
 if __name__ == "__main__":
     """Function to call when the module is executed by itself: test"""
     test_post()
+
