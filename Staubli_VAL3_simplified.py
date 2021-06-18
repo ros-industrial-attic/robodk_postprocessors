@@ -132,7 +132,7 @@ def angles_2_str(angles):
     """Prints a joint target for Staubli VAL3 XML"""
     str = ''    
     for i in range(len(angles)):
-        str = str + ('j%i="%.5f" ' % (i, angles[i]))
+        str = str + ('j%i="%.5f" ' % ((i+1), angles[i]))
     str = str[:-1]
     return str
     
