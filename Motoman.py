@@ -41,7 +41,7 @@
 # ----------------------------------------------------
 
 
-def get_safe_name(progname, max_chars = 6):
+def get_safe_name(progname, max_chars = 32):
     """Get a safe program name"""
     # Remove special characters
     for c in r'-[]/\;,><&*:%=+@!#^()|?^':
